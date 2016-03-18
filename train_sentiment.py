@@ -115,9 +115,10 @@ def training(embeddings, FLAGS):
                                                   inp, ids, lengths,
                                                   max_length=max_l,
                                                   max_batch_size=batch_size)
+                    size = min(len(batch)-e_off, batch_size)
                     ps1 = sess.run(model["probs"],
-                                   feed_dict={model["inp"]: inp,
-                                              model["ids"]: ids,
+                                   feed_dict={model["inp"]: inp[:,:size],
+                                              model["ids"]: ids[:,:size],
                                               model["lengths"]: lengths})
                     y = encode_labels(batch[e_off:e_off + batch_size], FLAGS.binary)
                     accuracy += np.sum(np.equal(np.argmax(ps1, axis=1), y))
