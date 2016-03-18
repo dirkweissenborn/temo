@@ -117,8 +117,8 @@ def training(embeddings, FLAGS):
                                                model["inpB"]: tB[:,:size],
                                                model["idsA"]: idsA[:,:size],
                                                model["idsB"]: idsB[:,:size],
-                                               model["lengthsA"]: lengthsA,
-                                               model["lengthsB"]: lengthsB})
+                                               model["lengthsA"]: lengthsA[:size],
+                                               model["lengthsB"]: lengthsB[:size]})
                     ps[e_off:e_off+batch_size] = ps1
                     e_off += batch_size
 
