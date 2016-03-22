@@ -97,8 +97,9 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size, input_size)
             elif FLAGS.cell == 'MORU':
-                if FLAGS.moru_op_biases is not None:
-                    biases = map(lambda s: float, FLAGS.moru_ops_biases.split(","))
+                biases = FLAGS.moru_op_biases
+                if biases is not None:
+                    biases = map(lambda s: float, biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
 
