@@ -97,7 +97,9 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size, input_size)
             elif FLAGS.cell == 'MORU':
-                cell = MORUCell(mem_size, input_size)
+                biases = map(lambda s: float, FLAGS.moru_ops_biases.split(","))
+                ops = FLAGS.moru_ops.split(",")
+                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
 
 
             nclasses = 2 if FLAGS.binary else 5
@@ -203,6 +205,12 @@ def training(embeddings, FLAGS):
         for el in pop:
             d += (mean - el) * (mean - el)
         return math.sqrt(d / len(pop))
+
+    if FLAGS.result_file:
+        with open(FLAGS.result_file, 'w') as f:
+            f.write('Test Accuracy: %.4f (%.4f)\n\n' % (mean_accuracy, s_dev(mean_accuracy, accuracies)))
+            f.write("Configuration: \n")
+            f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
 
     print '######## Overall #########'
     print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy, s_dev(mean_accuracy, accuracies))
@@ -355,6 +363,9 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer('tunable_dim', 10,
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
+    tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
+    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "Where to write results.")
+    tf.app.flags.DEFINE_string("moru_op_biases", '1,1,1,1', "Where to write results.")
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None

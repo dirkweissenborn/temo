@@ -39,7 +39,6 @@ def training(embeddings, FLAGS):
     testA, testB = map(lambda s: encode(s,vocab), test[0]), map(lambda s: encode(s,vocab), test[1])
     
     # embeddings
-    task_embeddings = None
     if FLAGS.embedding_mode != "combined":
         task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
         for w, i in vocab.iteritems():
@@ -89,13 +88,18 @@ def training(embeddings, FLAGS):
             tf.set_random_seed(rng.randint(0, 10000))
             rng2 = random.Random(rng.randint(0, 10000))
 
+            input_size = embedding_size
+            if FLAGS.embedding_mode == "combined":
+                input_size = embedding_size + task_embeddings.shape[1]
             cell = None
             if FLAGS.cell == 'LSTM':
                 cell = BasicLSTMCell(mem_size, embedding_size)
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size, embedding_size)
             elif FLAGS.cell == 'MORU':
-                cell = MORUCell(mem_size, embedding_size)
+                biases = map(lambda s: float, FLAGS.moru_ops_biases.split(","))
+                ops = FLAGS.moru_ops.split(",")
+                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cell, task_embeddings,
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
@@ -211,6 +215,16 @@ def training(embeddings, FLAGS):
     print 'Test Spearman: %.4f (%.4f)' % (mean_spearman,  s_dev(mean_spearman, spearmans))
     print 'Test MSE: %.4f (%.4f)' % (mean_mse,  s_dev(mean_mse, mses))
     print '########################'
+
+    if FLAGS.result_file:
+        with open(FLAGS.result_file, 'w') as f:
+            f.write('Pearson: %.4f (%.4f)\n' % (mean_pearson,  s_dev(mean_pearson, pearsons)))
+            f.write('Spearman: %.4f (%.4f)\n' % (mean_spearman,  s_dev(mean_spearman, spearmans)))
+            f.write('MSE: %.4f (%.4f)\n\n' % (mean_mse,  s_dev(mean_mse, mses)))
+            f.write("Configuration: \n")
+            f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
+
+    return mean_pearson
 
 
 def load_data(loc):
@@ -388,6 +402,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer('tunable_dim', 10,
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
+    tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
 
     FLAGS = tf.app.flags.FLAGS
 

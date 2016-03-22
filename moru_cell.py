@@ -2,23 +2,40 @@ import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 
 
+__operations = {"max": lambda s, f: tf.maximum(s, f),
+                "keep": lambda s, f: s,
+                "replace": lambda s, f: f,
+                "mul": lambda s, f: tf.mul(s, f),
+                "min": lambda s, f: tf.minimum(s, f),
+                "diff": lambda s, f: 0.5 * tf.abs(s - f),
+                "sqr_diff": lambda s, f: 0.25 * (s - f)**2}
+
+
 class MORUCell(RNNCell):
 
     def __init__(self, num_units, input_size=None,
                  op_controller_size=None,
-                 op_biases=(3.0, 1.0, 0, 0, 0),
                  ops=(lambda s, f: tf.maximum(s, f),
                       lambda s, f: s,
                       lambda s, f: f,
                       lambda s, f: tf.mul(s, f)
                       #lambda s, f: 0.5 * tf.abs(s - f),
                       #lambda s, f: tf.minimum(s, f),
-                      )):
+                      ),
+                 op_biases=(3.0, 1.0, 0, 0, 0)):
         self._num_units = num_units
         self._input_size = num_units if input_size is None else input_size
         self._op_controller_size = max(10, int(num_units / 5)) if op_controller_size is None else op_controller_size
         self._op_biases = op_biases
         self._ops = ops
+
+    @staticmethod
+    def from_op_names(operations, biases, num_units, input_size=None, op_controller_size=None):
+        if biases is None:
+            biases = map(lambda _: 1.0, operations)
+        assert len(biases) == len(operations), "Operations and operation biases have to have same length."
+        ops = map(lambda op: __operations[op], operations)
+        return MORUCell(num_units, input_size, op_controller_size, ops, biases)
 
     def _op_weights(self, inputs):
         t = tf.reshape(linear(inputs, self._num_units * (len(self._ops)), True), [-1, self._num_units, len(self._ops)])
