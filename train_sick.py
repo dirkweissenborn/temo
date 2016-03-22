@@ -39,6 +39,7 @@ def training(embeddings, FLAGS):
     testA, testB = map(lambda s: encode(s,vocab), test[0]), map(lambda s: encode(s,vocab), test[1])
     
     # embeddings
+    task_embeddings = None
     if FLAGS.embedding_mode != "combined":
         task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
         for w, i in vocab.iteritems():
