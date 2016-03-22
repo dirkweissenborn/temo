@@ -97,7 +97,8 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size, embedding_size)
             elif FLAGS.cell == 'MORU':
-                biases = map(lambda s: float, FLAGS.moru_ops_biases.split(","))
+                if FLAGS.moru_ops_biases is not None:
+                    biases = map(lambda s: float, FLAGS.moru_ops_biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
 
@@ -403,6 +404,9 @@ if __name__ == "__main__":
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
+    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
+    tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
+                                                       "Defaults to 0 for each.")
 
     FLAGS = tf.app.flags.FLAGS
 
