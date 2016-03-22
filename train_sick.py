@@ -99,7 +99,7 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
-                    biases = map(lambda s: float, biases.split(","))
+                    biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
 

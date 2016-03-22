@@ -2,13 +2,13 @@ import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 
 
-__operations = {"max": lambda s, f: tf.maximum(s, f),
-                "keep": lambda s, f: s,
-                "replace": lambda s, f: f,
-                "mul": lambda s, f: tf.mul(s, f),
-                "min": lambda s, f: tf.minimum(s, f),
-                "diff": lambda s, f: 0.5 * tf.abs(s - f),
-                "sqr_diff": lambda s, f: 0.25 * (s - f)**2}
+_operations = {"max": lambda s, f: tf.maximum(s, f),
+               "keep": lambda s, f: s,
+               "replace": lambda s, f: f,
+               "mul": lambda s, f: tf.mul(s, f),
+               "min": lambda s, f: tf.minimum(s, f),
+               "diff": lambda s, f: 0.5 * tf.abs(s - f),
+               "sqr_diff": lambda s, f: 0.25 * (s - f)**2}
 
 
 class MORUCell(RNNCell):
@@ -34,7 +34,7 @@ class MORUCell(RNNCell):
         if biases is None:
             biases = map(lambda _: 0.0, operations)
         assert len(biases) == len(operations), "Operations and operation biases have to have same length."
-        ops = map(lambda op: __operations[op], operations)
+        ops = map(lambda op: _operations[op], operations)
         return MORUCell(num_units, input_size, op_controller_size, ops, biases)
 
     def _op_weights(self, inputs):
