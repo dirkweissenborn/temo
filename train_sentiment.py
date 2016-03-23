@@ -375,7 +375,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
-    tf.app.flags.DEFINE_integer("checkpoint", 10000, "checkpoint at.")
+    tf.app.flags.DEFINE_integer("checkpoint", 1000, "checkpoint at.")
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
     tf.app.flags.DEFINE_boolean('binary', False, 'binary evaluation')
     tf.app.flags.DEFINE_integer('tunable_dim', 10,

@@ -139,7 +139,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string('data', 'data/ptb', 'data dir of ptb.')
 
     # model
-    tf.app.flags.DEFINE_integer("mem_size", 100, "hidden size of model")
+    tf.app.flags.DEFINE_integer("mem_size", 200, "hidden size of model")
     tf.app.flags.DEFINE_float("init_scale", 0.05, "uniform init weight")
 
     # training
