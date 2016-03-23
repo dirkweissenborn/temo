@@ -411,7 +411,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0, "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
-    tf.app.flags.DEFINE_string("cell", None, "'LSTM', 'GRU', 'MORU'")
+    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')

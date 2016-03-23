@@ -34,8 +34,6 @@ class PTBModel(object):
 
         if FLAGS.num_layers > 1:
             cell = tf.nn.rnn_cell.MultiRNNCell([cell] * FLAGS.num_layers)
-        else:
-            cell = MORUCell(mem_size)
 
         if is_training and FLAGS.keep_prob < 1:
             cell = tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=FLAGS.keep_prob, output_keep_prob=FLAGS.keep_prob)
@@ -152,7 +150,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("num_steps", 30, "Number of steps per training batch.")
     tf.app.flags.DEFINE_integer("vocab_size", 10000, "Size of vocabulary.")
     tf.app.flags.DEFINE_integer("num_layers", 1, "Number of layers.")
-    tf.app.flags.DEFINE_string("cell", None, "'LSTM', 'GRU', 'MORU'")
+    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
