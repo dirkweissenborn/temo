@@ -198,8 +198,10 @@ def training(embeddings, FLAGS):
                         pearson = p
                         saver.save(sess, '/tmp/my-model')
                     else:
-                        lr = tf.get_variable("model/lr")
-                        sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
+                        if FLAGS.learning_rate_decay < 1.0:
+                            print("Decaying learning rate.")
+                            lr = tf.get_variable("model/lr")
+                            sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
                         if epochs >= FLAGS.min_epochs:
                             break
 

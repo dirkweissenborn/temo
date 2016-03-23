@@ -4,6 +4,7 @@ import random
 import time
 from tensorflow.models.rnn import rnn
 from tensorflow.models.rnn.ptb import reader
+import os
 #  Adapted from tensorflow ptb_word_lm.py
 
 class PTBModel(object):
@@ -77,9 +78,6 @@ class PTBModel(object):
                                           FLAGS.max_grad_norm)
         optimizer = tf.train.AdamOptimizer(self.lr, beta1=0.0)
         self._train_op = optimizer.apply_gradients(zip(grads, tvars))
-
-    def assign_lr(self, session, lr_value):
-        session.run(tf.assign(self.lr, lr_value))
 
     @property
     def input_data(self):
@@ -167,13 +165,13 @@ if __name__ == "__main__":
     raw_data = reader.ptb_raw_data(FLAGS.data)
     train_data, valid_data, test_data, _ = raw_data
 
-    last_valid_perplexities = [float("inf")] * 3
     perplexities = []
 
     rng = random.Random(FLAGS.seed)
     for run_id in xrange(FLAGS.runs):
         tf.reset_default_graph()
-        with tf.Graph().as_default(), tf.Session() as session:
+        last_valid_perplexities = [float("inf")] * 3
+        with tf.Session() as sess:
             tf.set_random_seed(rng.randint(0, 10000))
             initializer = tf.random_uniform_initializer(-FLAGS.init_scale,
                                                         FLAGS.init_scale)
@@ -189,30 +187,35 @@ if __name__ == "__main__":
             saver = tf.train.Saver(tf.trainable_variables())
             i = 0
             while True:
-                print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
-                train_perplexity = run_epoch(session, m, train_data, m.train_op,
+                print("Epoch: %d Learning rate: %.4f" % (i + 1, sess.run(m.lr)))
+                train_perplexity = run_epoch(sess, m, train_data, m.train_op,
                                              verbose=True)
                 print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-                valid_perplexity = run_epoch(session, mvalid, valid_data, tf.no_op())
+                valid_perplexity = run_epoch(sess, mvalid, valid_data, tf.no_op())
                 print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
                 if last_valid_perplexities[-1]-1 < valid_perplexity:
                     if min(last_valid_perplexities[:-1])-1 < valid_perplexity:
                         break
-                    print("Decaying learning rate.")
-                    m.assign_lr(session, FLAGS.learning_rate * FLAGS.lr_decay)
+                    if FLAGS.learning_rate_decay < 1.0:
+                        print("Decaying learning rate.")
+                        sess.run(m.lr.assign(m.lr * FLAGS.learning_rate_decay))
                 else:
-                    saver.save(session, '/tmp/my-model')
+                    saver.save(sess, '/tmp/my-model')
 
                 last_valid_perplexities.append(valid_perplexity)
                 last_valid_perplexities = last_valid_perplexities[1:]
                 i += 1
 
-            saver.restore(session, '/tmp/my-model')
-            test_perplexity = run_epoch(session, mtest, test_data, tf.no_op())
+            saver.restore(sess, '/tmp/my-model')
+            test_perplexity = run_epoch(sess, mtest, test_data, tf.no_op())
             perplexities.append(test_perplexity)
+            print '######## Run %d #########' % run_id
             print("Test Perplexity: %.3f" % test_perplexity)
+            print '########################'
+            os.remove('/tmp/my-model')
 
     mean_perplexities = sum(perplexities) / len(perplexities)
+
 
     def s_dev(mean, pop):
         d = 0.0
