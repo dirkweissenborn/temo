@@ -35,8 +35,8 @@ def training(embeddings, FLAGS):
 
     vocab = dict()
     trainA, trainB = map(lambda s: encode(s, vocab, True), train[0]), map(lambda s: encode(s, vocab, True), train[1])
-    devA, devB = map(lambda s: encode(s,vocab), dev[0]), map(lambda s: encode(s,vocab), dev[1])
-    testA, testB = map(lambda s: encode(s,vocab), test[0]), map(lambda s: encode(s,vocab), test[1])
+    devA, devB = map(lambda s: encode(s,vocab), dev[0]), map(lambda s: encode(s, vocab), dev[1])
+    testA, testB = map(lambda s: encode(s,vocab), test[0]), map(lambda s: encode(s, vocab), test[1])
     
     # embeddings
     task_embeddings = None
@@ -102,16 +102,20 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
+                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cell, task_embeddings,
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
             tf.get_variable_scope().reuse_variables()
 
+            op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
+                          if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
             def evaluate(batchA, batchB, _scores):
                 tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
                 e_off = 0
                 ps = np.zeros((len(batchA), 5))
+                op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
+
                 while e_off < len(batchA):
                     tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(batchA[e_off:e_off+batch_size],
                                                                       batchB[e_off:e_off+batch_size],
@@ -119,15 +123,25 @@ def training(embeddings, FLAGS):
                                                                       tA, tB, idsA, idsB, lengthsA, lengthsB,
                                                                       max_length=max_l, max_batch_size=batch_size)
                     size = min(len(batchA)-e_off, batch_size)
-                    ps1 = sess.run(model["probs"],
+                    allowed_conds = ["/cond_%d/" % i for i in xrange(min(np.min(lengthsA),np.min(lengthsB)))]
+                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    random.shuffle(current_weights)
+                    result = sess.run([model["probs"]] + current_weights[:10],
                                     feed_dict={model["inpA"]: tA[:,:size],
                                                model["inpB"]: tB[:,:size],
                                                model["idsA"]: idsA[:,:size],
                                                model["idsB"]: idsB[:,:size],
                                                model["lengthsA"]: lengthsA[:size],
                                                model["lengthsB"]: lengthsB[:size]})
-                    ps[e_off:e_off+batch_size] = ps1
+                    ps[e_off:e_off+batch_size] = result[0]
                     e_off += batch_size
+                    for probs, w in zip(result[1:], current_weights):
+                        op_weights_monitor[w.name[-11:]].extend(probs.tolist())
+
+                for k,v in op_weights_monitor.iteritems():
+                    hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
+                    hist = (hist * 1000) / np.sum(hist)
+                    print(k, hist.tolist())
 
                 r = np.arange(1,6)
                 yhat = np.dot(ps, r)
@@ -177,7 +191,6 @@ def training(embeddings, FLAGS):
                     tp, _, tse = evaluate(shuffledA, shuffledB, y)
                     p, _, se = evaluate(devA, devB, y_scores[1])
                     sess.run(model["keep_prob"].initializer)
-
                     print("Train loss: %.3f, Pearson: %.3f, Pearson on Dev: %.3f" % (loss, tp, p))
                     i = 0
                     loss = 0.0
@@ -384,18 +397,18 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
 
 if __name__ == "__main__":
     # data loading specifics
-    tf.app.flags.DEFINE_string('data', None, 'data dir of SICK.')
+    tf.app.flags.DEFINE_string('data', 'data/sick', 'data dir of SICK.')
     tf.app.flags.DEFINE_string('embedding_format', 'prepared', 'glove|word2vec_bin|word2vec|dict|prepared')
-    tf.app.flags.DEFINE_string('embedding_file', None, 'path to embeddings')
+    tf.app.flags.DEFINE_string('embedding_file', 'sick_embeddings.pkl', 'path to embeddings')
 
     # model
-    tf.app.flags.DEFINE_string("mem_size", "150", "hidden size of model")
-    tf.app.flags.DEFINE_string("h_size", "50", "size of interaction")
+    tf.app.flags.DEFINE_integer("mem_size", 100, "hidden size of model")
+    tf.app.flags.DEFINE_integer("h_size", 50, "size of interaction")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 0.5, "Learning rate decay when loss on validation set does not improve.")
+    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0, "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", None, "'LSTM', 'GRU', 'MORU'")
@@ -409,6 +422,9 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
                                                        "Defaults to 0 for each.")
+    tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
+                                                     "and previous state. Given a positive integer, an additional"
+                                                     "recurrent op ctr is introduced in MORUCell.")
 
     FLAGS = tf.app.flags.FLAGS
 
@@ -436,17 +452,7 @@ if __name__ == "__main__":
                                           load_kwargs=kwargs)
     print "Done."
 
-    h_sizes = map(int, FLAGS.h_size.split(","))
-    mem_sizes = map(int, FLAGS.mem_size.split(","))
-    cells = FLAGS.cell.split(",")
-
     import json
-    for h_size in h_sizes:
-        FLAGS.h_size = h_size
-        for mem_size in mem_sizes:
-            FLAGS.mem_size = mem_size
-            for cell in cells:
-                FLAGS.cell = cell
-                print("Configuration: ")
-                print(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
-                training(e, FLAGS)
+    print("Configuration: ")
+    print(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
+    training(e, FLAGS)

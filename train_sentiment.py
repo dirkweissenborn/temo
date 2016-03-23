@@ -6,6 +6,7 @@ from sklearn.utils import shuffle
 from tensorflow.python.ops.rnn import rnn
 import os
 import numpy as np
+import re
 
 def training(embeddings, FLAGS):
     # Load data
@@ -102,18 +103,20 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size)
+                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
 
             nclasses = 2 if FLAGS.binary else 5
             model = create_model(max_l, l2_lambda, learning_rate, cell, task_embeddings, FLAGS.embedding_mode,
                                  FLAGS.keep_prob, nclasses)
             tf.get_variable_scope().reuse_variables()
-
+            op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
+                          if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
             def evaluate(batch):
                 inp, ids, lengths = None, None, None
                 e_off = 0
                 accuracy = 0.0
+                op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
                 while e_off < len(batch):
                     inp, ids, lengths = batchify(batch[e_off:e_off + batch_size],
                                                   vocab["<padding>"],
@@ -121,15 +124,27 @@ def training(embeddings, FLAGS):
                                                   max_length=max_l,
                                                   max_batch_size=batch_size)
                     size = min(len(batch)-e_off, batch_size)
-                    ps1 = sess.run(model["probs"],
+                    allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
+                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    random.shuffle(current_weights)
+                    result = sess.run([model["probs"]] + current_weights[:10],
                                    feed_dict={model["inp"]: inp[:,:size],
                                               model["ids"]: ids[:,:size],
                                               model["lengths"]: lengths[:size]})
                     y = encode_labels(batch[e_off:e_off + batch_size], FLAGS.binary)
-                    accuracy += np.sum(np.equal(np.argmax(ps1, axis=1), y))
+                    accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y))
+                    for probs, w in zip(result[1:], current_weights):
+                        op_weights_monitor[w.name[-11:]].extend(probs.tolist())
+
                     e_off += batch_size
 
                 accuracy = accuracy / len(batch)
+
+                for k,v in op_weights_monitor.iteritems():
+                    hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
+                    hist = (hist * 1000) / np.sum(hist)
+                    print(k, hist.tolist())
+
                 return accuracy
 
             saver = tf.train.Saver(tf.trainable_variables())
@@ -188,7 +203,7 @@ def training(embeddings, FLAGS):
                     else:
                         lr = tf.get_variable("model/lr")
                         sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
-                        if epochs > FLAGS.min_epochs:
+                        if epochs >= FLAGS.min_epochs:
                             break
 
             saver.restore(sess, '/tmp/my-model')
@@ -343,17 +358,17 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
 
 if __name__ == "__main__":
     # data loading specifics
-    tf.app.flags.DEFINE_string('data', None, 'data dir of SST.')
-    tf.app.flags.DEFINE_string('embedding_file', None, 'path to prepared embeddings (see prepare_sentiment.py)')
+    tf.app.flags.DEFINE_string('data', 'data/sst', 'data dir of SST.')
+    tf.app.flags.DEFINE_string('embedding_file', 'sentiment_embeddings.pkl', 'path to prepared embeddings (see prepare_sentiment.py)')
     tf.app.flags.DEFINE_string('embedding_format', 'prepared', 'glove|word2vec_bin|word2vec|dict|prepared')
 
     # model
-    tf.app.flags.DEFINE_string("mem_size", "150", "hidden size of model")
+    tf.app.flags.DEFINE_integer("mem_size", 100, "hidden size of model")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 0.5,
+    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
@@ -370,6 +385,9 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
                                                        "Defaults to 0 for each.")
+    tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
+                                                 "and previous state. Given a positive integer, an additional"
+                                                 "recurrent op ctr is introduced in MORUCell.")
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None
@@ -397,16 +415,8 @@ if __name__ == "__main__":
                                           clean_words=False)
     print "Done."
 
-    mem_sizes = map(int, FLAGS.mem_size.split(","))
-    cells = FLAGS.cell.split(",")
-
     import json
-
-    for mem_size in mem_sizes:
-        FLAGS.mem_size = mem_size
-        for cell in cells:
-            FLAGS.cell = cell
-            print("Configuration: ")
-            print(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
-            training(e, FLAGS)
+    print("Configuration: ")
+    print(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
+    training(e, FLAGS)
 
