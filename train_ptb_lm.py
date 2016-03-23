@@ -5,6 +5,7 @@ import time
 from tensorflow.models.rnn import rnn
 from tensorflow.models.rnn.ptb import reader
 import os
+import copy
 #  Adapted from tensorflow ptb_word_lm.py
 
 class PTBModel(object):
@@ -161,10 +162,9 @@ if __name__ == "__main__":
                                                      "recurrent op ctr is introduced in MORUCell.")
 
     FLAGS = tf.app.flags.FLAGS
-
+    eval_FLAGS = copy.deepcopy(FLAGS)
     raw_data = reader.ptb_raw_data(FLAGS.data)
     train_data, valid_data, test_data, _ = raw_data
-
     perplexities = []
 
     rng = random.Random(FLAGS.seed)
@@ -179,9 +179,9 @@ if __name__ == "__main__":
                 m = PTBModel(is_training=True, FLAGS=FLAGS)
             with tf.variable_scope("model", reuse=True, initializer=initializer):
                 mvalid = PTBModel(is_training=False, FLAGS=FLAGS)
-                FLAGS.batch_size = 1
-                FLAGS.num_steps = 1
-                mtest = PTBModel(is_training=False, FLAGS=FLAGS)
+                eval_FLAGS.batch_size = 1
+                eval_FLAGS.num_steps = 1
+                mtest = PTBModel(is_training=False, FLAGS=eval_FLAGS)
 
             tf.initialize_all_variables().run()
             saver = tf.train.Saver(tf.trainable_variables())
