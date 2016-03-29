@@ -8,6 +8,7 @@ _operations = {"max": lambda s, f: tf.maximum(s, f),
                "mul": lambda s, f: tf.mul(s, f),
                "min": lambda s, f: tf.minimum(s, f),
                "diff": lambda s, f: 0.5 * tf.abs(s - f),
+	       "forget":lambda s, f: tf.zeros_like(s),
                "sqr_diff": lambda s, f: 0.25 * (s - f)**2}
 
 
