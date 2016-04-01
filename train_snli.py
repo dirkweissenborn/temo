@@ -75,9 +75,7 @@ def training(embeddings, FLAGS):
     rng = random.Random(FLAGS.seed)
     batch_size = FLAGS.batch_size
 
-    accuracys = []
-    spearmans = []
-    mses = []
+    accuracies = []
 
     tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
 
@@ -87,7 +85,7 @@ def training(embeddings, FLAGS):
             tf.set_random_seed(rng.randint(0, 10000))
             rng2 = random.Random(rng.randint(0, 10000))
 
-	    input_size = embedding_size
+            input_size = embedding_size
             if FLAGS.embedding_mode == "combined":
                 input_size = embedding_size + task_embeddings.shape[1]
             cell = None
@@ -96,7 +94,7 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size, embedding_size)
             elif FLAGS.cell == 'MORU':
-		biases = FLAGS.moru_op_biases
+                biases = FLAGS.moru_op_biases
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
@@ -164,7 +162,7 @@ def training(embeddings, FLAGS):
                 i += 1
                 if offset + batch_size > len(shuffledA):
                     epochs += 1
-		    print("%d epochs done" % epochs)
+                    print("%d epochs done" % epochs)
                     shuffledA, shuffledB, y = shuffle(shuffledA, shuffledB, y, random_state=rng2.randint(0, 1000))
                     offset = 0
 	        
@@ -189,13 +187,13 @@ def training(embeddings, FLAGS):
             saver.restore(sess, '/tmp/my-model')
             sess.run(model["keep_prob"].assign(1.0))
             acc = evaluate(testA, testB, y_scores[2])
-            accuracys.append(acc)
+            accuracies.append(acc)
             print '######## Run %d #########' % run_id
             print 'Test Accuracy: %.4f' % acc
             print '########################'
             os.remove('/tmp/my-model')
 
-    mean_accuracy = sum(accuracys) / len(accuracys)
+    mean_accuracy = sum(accuracies) / len(accuracies)
 
     def s_dev(mean, pop):
         d = 0.0
@@ -204,7 +202,7 @@ def training(embeddings, FLAGS):
         return math.sqrt(d/len(pop))
 
     print '######## Overall #########'
-    print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracys))
+    print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies))
     print '########################'
 
 
@@ -280,14 +278,6 @@ def batchify(batchA, batchB, padding, tA, tB, idsA, idsB, lengthsA, lengthsB, ma
     return tA, tB, idsA, idsB, lengthsA, lengthsB
 
 
-def fully_con_sim(inpA, inpB, h_size):
-    inp = tf.concat(1, [inpA * inpB, tf.abs(inpA - inpB)])
-    h = tf.contrib.layers.fully_connected(inp, h_size, activation_fn=tf.sigmoid,
-                                          weight_init=None)
-    scores = tf.contrib.layers.fully_connected(h, 3,weight_init=None)
-    return scores
-
-
 # Create Model
 def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, embedding_mode, keep_prob,
                  initializer=tf.random_uniform_initializer(-0.05, 0.05)):
@@ -333,21 +323,19 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
 
         with tf.variable_scope("premise", initializer=initializer):
             premise, c = my_rnn(None if embedding_mode == "tuned" else inpA, None if embedding_mode == "fixed" else idsA, cell,
-                                  lengthsA, embeddings)
-	
-	with tf.variable_scope("hypothesis", initializer=initializer):
+                                lengthsA, embeddings)
+
+        with tf.variable_scope("hypothesis", initializer=initializer):
             hypothesis, _ = my_rnn(None if embedding_mode == "tuned" else inpB, None if embedding_mode == "fixed" else idsB, cell,
-                         lengthsB, embeddings, init_state=c)
-           # h = tf.reshape(out, (length, -1, mem_size)), [length-1,0,0],[1,-1,-1])
-            #h = tf.squeeze(h, [0])
-        #hA, hB = tf.split(0, 2, h)
-        #with tf.variable_scope("similarity", initializer=initializer):
-          #  scores = fully_con_sim(hA, hB, h_size)
-	h =tf.concat(1, [premise, hypothesis])
-	scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
+                                   lengthsB, embeddings, init_state=c)
+
+        h = tf.concat(1, [premise, hypothesis])
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
+                                              weight_init=None)
+        scores = tf.contrib.layers.fully_connected(h, 3,weight_init=None)
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
-	
+
         loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(scores, y)) / batch_size
         train_params = tf.trainable_variables()
         if l2_lambda > 0.0:
