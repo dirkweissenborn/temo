@@ -205,6 +205,14 @@ def training(embeddings, FLAGS):
     print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies))
     print '########################'
 
+    if FLAGS.result_file:
+        with open(FLAGS.result_file, 'w') as f:
+            f.write('Accuracy: %.4f (%.4f)\n' % (mean_accuracy,  s_dev(mean_accuracy, accuracies)))
+            f.write("Configuration: \n")
+            f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
+
+    return mean_accuracy
+
 
 def load_data(loc):
     """
@@ -355,14 +363,14 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string('embedding_file', 'snli_embeddings.pkl', 'path to embeddings')
 
     # model
-    tf.app.flags.DEFINE_integer("mem_size", 300, "hidden size of model")
-    tf.app.flags.DEFINE_integer("h_size", 50, "size of interaction")
+    tf.app.flags.DEFINE_integer("mem_size", 200, "hidden size of model")
+    tf.app.flags.DEFINE_integer("h_size", 200, "size of interaction")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0, "Learning rate decay when loss on validation set does not improve.")
-    tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
+    tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 3, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
