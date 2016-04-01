@@ -104,11 +104,16 @@ def training(embeddings, FLAGS):
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
             tf.get_variable_scope().reuse_variables()
 
+            op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
+                          if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
+
             def evaluate(batchA, batchB, _scores):
                 tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
                 e_off = 0
                 accuracy = 0.0
                 y = encode_labels(_scores)
+                op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
+
                 while e_off < len(batchA):
                     tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(batchA[e_off:e_off+batch_size],
                                                                       batchB[e_off:e_off+batch_size],
@@ -116,15 +121,26 @@ def training(embeddings, FLAGS):
                                                                       tA, tB, idsA, idsB, lengthsA, lengthsB,
                                                                       max_length=max_l, max_batch_size=batch_size)
                     size = min(len(batchA)-e_off, batch_size)
-                    ps = sess.run(model["probs"],
+                    allowed_conds = ["/cond_%d/" % i for i in xrange(min(np.min(lengthsA), np.min(lengthsB)))]
+                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    result = sess.run([model["probs"]] + current_weights[:10],
                                     feed_dict={model["inpA"]: tA[:,:size],
                                                model["inpB"]: tB[:,:size],
                                                model["idsA"]: idsA[:,:size],
                                                model["idsB"]: idsB[:,:size],
                                                model["lengthsA"]: lengthsA[:size],
                                                model["lengthsB"]: lengthsB[:size]})
-                    accuracy += np.sum(np.equal(np.argmax(ps, axis=1), y[e_off:e_off+size]))
+                    accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y[e_off:e_off+size]))
                     e_off += size
+
+                    for probs, w in zip(result[1:], current_weights):
+                        op_weights_monitor[w.name[-11:]].extend(probs.tolist())
+
+                for k,v in op_weights_monitor.iteritems():
+                    hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
+                    hist = (hist * 1000) / np.sum(hist)
+                    print(k, hist.tolist())
+
                 accuracy /= e_off
                 return accuracy
 
@@ -375,7 +391,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
-    tf.app.flags.DEFINE_string('embedding_mode', 'tuned', 'fixed|tuned|combined')
+    tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
     tf.app.flags.DEFINE_integer('tunable_dim', 10,
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
