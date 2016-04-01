@@ -2,14 +2,14 @@ import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 
 
-_operations = {"max": lambda s, f: tf.maximum(s, f),
-               "keep": lambda s, f: s,
-               "replace": lambda s, f: f,
-               "mul": lambda s, f: tf.mul(s, f),
-               "min": lambda s, f: tf.minimum(s, f),
-               "diff": lambda s, f: 0.5 * tf.abs(s - f),
-               "forget":lambda s, f: tf.zeros_like(s),
-               "sqr_diff": lambda s, f: 0.25 * (s - f)**2}
+_operations = {"max": lambda s, v: tf.maximum(s, v),
+               "keep": lambda s, v: s,
+               "replace": lambda s, v: v,
+               "mul": lambda s, v: tf.mul(s, v),
+               "min": lambda s, v: tf.minimum(s, v),
+               "diff": lambda s, v: 0.5 * tf.abs(s - v),
+               "forget": lambda s, v: tf.zeros_like(s),
+               "sqr_diff": lambda s, v: 0.25 * (s - v)**2}
 
 
 class MORUCell(RNNCell):
@@ -89,7 +89,6 @@ class MORUCell(RNNCell):
             return new_c, tf.concat(1, [new_c, new_op_ctr])
         else:
             return new_c, new_c
-
 
 
 class AssociativeMORUCell(RNNCell):
