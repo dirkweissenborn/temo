@@ -97,7 +97,7 @@ class AssociativeGRUCell(RNNCell):
         self._num_units = num_units
         self._input_size = num_units if input_size is None else input_size
         self._num_copies = num_copies
-        self._permutations = [list(xrange(0, num_units)) for _ in xrange(self._num_copies)]
+        self._permutations = [list(xrange(0, num_units/2)) for _ in xrange(self._num_copies)]
         for perm in self._permutations:
             random.shuffle(perm)
 
@@ -114,22 +114,21 @@ class AssociativeGRUCell(RNNCell):
         return self._num_units * (self._num_copies+1)
 
     def __call__(self, inputs, state, scope=None):
-        """Gated recurrent unit (GRU) with nunits cells."""
-        with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
+        with vs.variable_scope(scope or type(self).__name__):
+            with vs.variable_scope("Permutations"):
+                perms = map(lambda perm: tf.constant(perm), self._permutations)
+
             split = tf.split(1, 1+self._num_copies, state)
             h = split[0]
             ss = [complexify(s) for s in split[1:]]
             with vs.variable_scope("Keys"):
-                k_tr = linear([inputs, h], self._num_units, True)
-                #k_tr_r, k_tr_w = tf.split(1, 2, k_tr)
-                #k_rs = []
-                k_split = tf.split(1, self._num_units, k_tr)
-                ks = []
-                for perm in self._permutations:
-                    l = []
-                    for i in perm:
-                        l.append(k_split[i])
-                    ks.append(bound(complexify(tf.concat(1, l))))
+                k = bound(complexify(linear([inputs, h], self._num_units, True)))
+                with tf.device("/cpu:0"):
+                    k_real = tf.transpose(tf.real(k))
+                    k_imag = tf.transpose(tf.imag(k))
+                    ks = []
+                    for perm in perms:
+                        ks.append(tf.complex(tf.transpose(tf.gather(k_real, perm)), tf.transpose(tf.gather(k_imag, perm))))
 
             with vs.variable_scope("Read"):
                 old_f = uncomplexify(self._read(map(tf.conj, ks), ss))
