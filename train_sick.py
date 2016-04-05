@@ -1,6 +1,4 @@
-import tensorflow as tf
-import web.embeddings
-import web.embedding
+import util
 import nltk
 import numpy as np
 from moru_cell import *
@@ -110,20 +108,20 @@ def training(embeddings, FLAGS):
 
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
-            def evaluate(batchA, batchB, _scores):
+            def evaluate(dsA, dsB, _scores):
                 tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
                 e_off = 0
-                ps = np.zeros((len(batchA), 5))
+                ps = np.zeros((len(dsA), 5))
                 op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
 
-                while e_off < len(batchA):
-                    tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(batchA[e_off:e_off+batch_size],
-                                                                      batchB[e_off:e_off+batch_size],
+                while e_off < len(dsA):
+                    tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(dsA[e_off:e_off + batch_size],
+                                                                      dsB[e_off:e_off + batch_size],
                                                                       vocab["<padding>"],
                                                                       tA, tB, idsA, idsB, lengthsA, lengthsB,
                                                                       max_length=max_l, max_batch_size=batch_size)
-                    size = min(len(batchA)-e_off, batch_size)
-                    allowed_conds = ["/cond_%d/" % i for i in xrange(min(np.min(lengthsA),np.min(lengthsB)))]
+                    size = min(len(dsA) - e_off, batch_size)
+                    allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA),np.min(lengthsB)))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
@@ -299,8 +297,8 @@ def batchify(batchA, batchB, padding, tA, tB, idsA, idsB, lengthsA, lengthsB, ma
 
     tA = np.zeros([max_length, max_batch_size, embedding_size]) if tA is None else tA
     tB = np.zeros([max_length, max_batch_size, embedding_size]) if tB is None else tB
-    idsA = np.ones([max_length, max_batch_size]) if idsA is None else idsA
-    idsB = np.ones([max_length, max_batch_size]) if idsB is None else idsB
+    idsA = np.ones([max_length, max_batch_size], np.int32) if idsA is None else idsA
+    idsB = np.ones([max_length, max_batch_size], np.int32) if idsB is None else idsB
     idsA *= padding
     idsB *= padding
 
@@ -435,23 +433,7 @@ if __name__ == "__main__":
         kwargs = {"vocab_size": 2196017, "dim": 300}
 
     print "Loading embeddings..."
-    e = None
-    if FLAGS.embedding_format == "prepared":
-        import io
-        import pickle
-        content = io.open(FLAGS.embedding_file, 'rb')
-        state = pickle.load(content)
-        voc, vec = state
-        if len(voc) == 2:
-            words, counts = voc
-            word_count = dict(zip(words, counts))
-            vocab = web.embedding.CountedVocabulary(word_count=word_count)
-        else:
-            vocab = web.embedding.OrderedVocabulary(voc)
-        e = web.embedding.Embedding(vocabulary=vocab, vectors=vec)
-    else:
-        e = web.embeddings.load_embedding(FLAGS.embedding_file, format=FLAGS.embedding_format, normalize=False, clean_words=False,
-                                          load_kwargs=kwargs)
+    e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
     print "Done."
 
     import json

@@ -1,5 +1,4 @@
-import web.embeddings
-import web.embedding
+import util
 from moru_cell import *
 import random
 from sklearn.utils import shuffle
@@ -7,6 +6,26 @@ from tensorflow.python.ops.rnn import rnn
 import os
 import numpy as np
 import re
+
+
+
+def encode(sentence, vocab, embeddings, fill_vocab=False):
+    embedding_size = embeddings.vectors.shape[1]
+    words = []
+    word_ids = []
+    if "<unk>" not in vocab:
+        vocab["<unk>"] = len(vocab)
+    if "<padding>" not in vocab:
+        vocab["<padding>"] = len(vocab)
+    for w in sentence:
+        # w = w.lower()
+        if fill_vocab and w not in vocab:
+            vocab[w] = len(vocab)
+        wv = embeddings.get(w, embeddings.get(w.lower(), np.zeros(embedding_size)))
+        words.append(wv)
+        word_ids.append(vocab.get(w, vocab.get(w.lower(), vocab["<unk>"])))
+    return words, word_ids
+
 
 def training(embeddings, FLAGS):
     # Load data
@@ -17,30 +36,12 @@ def training(embeddings, FLAGS):
     embedding_size = embeddings.vectors.shape[1]
 
     # Encode data
-    zero_wv = np.zeros(embedding_size)
-
-    def encode(sentence, vocab, fill_vocab=False):
-        words = []
-        word_ids = []
-        if "<unk>" not in vocab:
-            vocab["<unk>"] = len(vocab)
-        if "<padding>" not in vocab:
-            vocab["<padding>"] = len(vocab)
-        for w in sentence:
-            # w = w.lower()
-            if fill_vocab and w not in vocab:
-                vocab[w] = len(vocab)
-            wv = embeddings.get(w, embeddings.get(w.lower(), zero_wv))
-            words.append(wv)
-            word_ids.append(vocab.get(w, vocab.get(w.lower(), vocab["<unk>"])))
-        return words, word_ids
-
     vocab = dict()
-    train = [(encode(phrase, vocab, True), label) for tree in train for phrase, label in
+    train = [(encode(phrase, vocab, embeddings, True), label) for tree in train for phrase, label in
              tree.all_labeled_phrases()]  # if label != 0 or len(phrase) == len(tree.sentence)]
     #train = [(encode(tree.sentence, vocab, True), tree.label) for tree in train]
-    dev = [(encode(tree.sentence, vocab, True), tree.label) for tree in dev]
-    test = [(encode(tree.sentence, vocab, True), tree.label) for tree in test]
+    dev = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in dev]
+    test = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in test]
     if FLAGS.binary:
         train = filter(lambda x: x[1] != 0, train)
         test = filter(lambda x: x[1] != 0, test)
@@ -112,18 +113,18 @@ def training(embeddings, FLAGS):
             tf.get_variable_scope().reuse_variables()
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
-            def evaluate(batch):
+            def evaluate(ds):
                 inp, ids, lengths = None, None, None
                 e_off = 0
                 accuracy = 0.0
                 op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
-                while e_off < len(batch):
-                    inp, ids, lengths = batchify(batch[e_off:e_off + batch_size],
-                                                  vocab["<padding>"],
-                                                  inp, ids, lengths,
-                                                  max_length=max_l,
-                                                  max_batch_size=batch_size)
-                    size = min(len(batch)-e_off, batch_size)
+                while e_off < len(ds):
+                    inp, ids, lengths = batchify(ds[e_off:e_off + batch_size],
+                                                 vocab["<padding>"],
+                                                 inp, ids, lengths,
+                                                 max_length=max_l,
+                                                 max_batch_size=batch_size)
+                    size = min(len(ds) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     random.shuffle(current_weights)
@@ -131,14 +132,14 @@ def training(embeddings, FLAGS):
                                    feed_dict={model["inp"]: inp[:,:size],
                                               model["ids"]: ids[:,:size],
                                               model["lengths"]: lengths[:size]})
-                    y = encode_labels(batch[e_off:e_off + batch_size], FLAGS.binary)
+                    y = encode_labels(ds[e_off:e_off + batch_size], FLAGS.binary)
                     accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y))
                     for probs, w in zip(result[1:], current_weights):
                         op_weights_monitor[w.name[-11:]].extend(probs.tolist())
 
                     e_off += batch_size
 
-                accuracy = accuracy / len(batch)
+                accuracy = accuracy / len(ds)
 
                 for k,v in op_weights_monitor.iteritems():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
@@ -216,7 +217,6 @@ def training(embeddings, FLAGS):
             print '######## Run %d #########' % run_id
             print 'Test Accuracy: %.4f' % acc
             print '########################'
-            os.remove('/tmp/my-model')
 
     mean_accuracy = sum(accuracies) / len(accuracies)
 
@@ -287,7 +287,7 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
     embedding_size = batch[0][0][0][0].shape[0]
 
     inp = np.zeros([max_length, max_batch_size, embedding_size]) if inp is None else inp
-    ids = np.ones([max_length, max_batch_size]) if ids is None else ids
+    ids = np.ones([max_length, max_batch_size], np.int32) if ids is None else ids
     lengths = np.zeros([max_batch_size], np.int32) if lengths is None else lengths
 
     for i in xrange(len(batch)):
@@ -397,24 +397,7 @@ if __name__ == "__main__":
         kwargs = {"vocab_size": 2196017, "dim": 300}
 
     print "Loading embeddings..."
-    e = None
-    if FLAGS.embedding_format == "prepared":
-        import io
-        import pickle
-
-        content = io.open(FLAGS.embedding_file, 'rb')
-        state = pickle.load(content)
-        voc, vec = state
-        if len(voc) == 2:
-            words, counts = voc
-            word_count = dict(zip(words, counts))
-            vocab = web.embedding.CountedVocabulary(word_count=word_count)
-        else:
-            vocab = web.embedding.OrderedVocabulary(voc)
-        e = web.embedding.Embedding(vocabulary=vocab, vectors=vec)
-    else:
-        e = web.embeddings.load_embedding(FLAGS.embedding_file, format=FLAGS.embedding_format, normalize=False,
-                                          clean_words=False)
+    e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
     print "Done."
 
     import json
