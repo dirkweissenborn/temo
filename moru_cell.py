@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
-
+import numpy as np
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -161,9 +161,104 @@ class AssociativeMORUCell(RNNCell):
         return s, s
 
 
+class AssociativeGRUCell(RNNCell):
+
+    def __init__(self, num_units, num_copies=1, input_size=None):
+        self._num_units = num_units
+        self._input_size = num_units if input_size is None else input_size
+        self._num_copies = num_copies
+        self._permutations = [np.random.permutation(xrange(0, num_units)) for _ in xrange(self._num_copies)]
+        # permutations with transpose -> gather -> transpose
+
+    @property
+    def input_size(self):
+        return self._input_size
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    @property
+    def state_size(self):
+        return self._num_units * (self._num_copies+1)
+
+    def __call__(self, inputs, state, scope=None):
+        """Gated recurrent unit (GRU) with nunits cells."""
+        with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
+            with vs.variable_scope("Permutations"):
+                perms = map(lambda perm: tf.constant(perm), self._permutations)
+
+            split = tf.split(1, 1+self._num_copies, state)
+            h = split[0]
+            ss = [complexify(s) for s in split[1:]]
+            with vs.variable_scope("Keys"):
+                k_tr = tf.transpose(bound(linear([inputs, h], self._num_units, True)))
+                #k_tr_r, k_tr_w = tf.split(1, 2, k_tr)
+                #k_rs = []
+                ks = []
+                for perm in perms:
+                    #k_rs.append(complexify(tf.transpose(tf.gather(k_tr_r, perm))))
+                    ks.append(complexify(tf.transpose(tf.gather(k_tr, perm))))
+
+            with vs.variable_scope("Read"):
+                old_f = self._read(map(tf.conj, ks), ss)
+
+            with vs.variable_scope("Gates"):  # Reset gate and update gate.
+                # We start with bias of 1.0 to not reset and not update.
+                r, u = array_ops.split(1, 2, linear([inputs, old_f],
+                                                     2 * self._num_units, True, 1.0))
+                r, u = sigmoid(r), sigmoid(u)
+            with vs.variable_scope("Candidate"):
+                c = bound(linear([inputs, r * old_f, h], self._num_units, True))
+
+            to_add = u * (c - old_f)
+            c_to_add = complexify(to_add)
+            new_ss = [uncomplexify(s + k_w * c_to_add) for k_w, s in zip(ks, ss)]
+            new_h = old_f + to_add
+
+        return new_h, tf.concat(1, [new_h] + new_ss)
+
+    def _read(self, keys, redundant_states):
+        read = uncomplexify(keys[0] * redundant_states[0])
+        for i in xrange(1, self._num_copies):
+            read = read + uncomplexify(tf.conj(keys[i]) * redundant_states[i])
+        if self._num_copies > 1:
+            read /= self._num_copies
+        return read
+
+
+class ControlledAssociativeGRUCell(AssociativeGRUCell):
+    @property
+    def state_size(self):
+        return self._num_units * (self._num_copies+2)
+
+    def __call__(self, inputs, state, scope=None):
+        h = tf.slice(state, [0, 0], [-1, self._num_units])
+        s = tf.slice(state, [0, self._num_units], [-1, -1])
+        assoc_h, assoc_s = AssociativeGRUCell.__call__(self, inputs, s, scope)
+        with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
+
+
+
+            with vs.variable_scope("Controller"):  # "GRUCell"
+                with vs.variable_scope("Gates"):  # Reset gate and update gate.
+                    # We start with bias of 1.0 to not reset and not update.
+                    r, u = array_ops.split(1, 2, linear([assoc_h, h],
+                                                        2 * self._num_units, True, 1.0))
+                    r, u = sigmoid(r), sigmoid(u)
+                with vs.variable_scope("Candidate"):
+                    c = tanh(linear([assoc_h, r * h], self._num_units, True))
+                new_h = u * h + (1 - u) * c
+        return new_h, tf.concat(1, [new_h, assoc_s])
+
+
+
 def complexify(v):
-    v_r, v_i = tf.split(1,2,v)
+    v_r, v_i = tf.split(1, 2, v)
     return tf.complex(v_r, v_i)
+
+def uncomplexify(v):
+    return tf.concat(1, [tf.real(v), tf.imag(v)])
 
 
 def bound(v):

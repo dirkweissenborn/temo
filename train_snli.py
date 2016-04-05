@@ -27,6 +27,7 @@ def encode(sentence, vocab, embeddings, fill_vocab=False):
 
 def training(embeddings, FLAGS):
     # Load data
+    print("Preparing data...")
     train, dev, test, y_scores = load_data(FLAGS.data)
     embedding_size = embeddings.vectors.shape[1]
 
@@ -66,6 +67,7 @@ def training(embeddings, FLAGS):
     max_l = max_length(testA, max_l)
     max_l = max_length(testB, max_l)
 
+    print("Done.")
 
     l2_lambda = FLAGS.l2_lambda
     learning_rate = FLAGS.learning_rate
@@ -87,19 +89,22 @@ def training(embeddings, FLAGS):
             input_size = embedding_size
             if FLAGS.embedding_mode == "combined":
                 input_size = embedding_size + task_embeddings.shape[1]
-            cell = None
+            cellA = cellB = None
             if FLAGS.cell == 'LSTM':
-                cell = BasicLSTMCell(mem_size, embedding_size)
+                cellA = cellB = BasicLSTMCell(mem_size, embedding_size)
             elif FLAGS.cell == 'GRU':
-                cell = GRUCell(mem_size, embedding_size)
+                cellA = cellB = GRUCell(mem_size, embedding_size)
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+            elif FLAGS.cell == "AssociativeGRU":
+                cellA = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
+                cellB = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
 
-            model = create_model(max_l, l2_lambda, learning_rate, h_size, cell, task_embeddings,
+            model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, task_embeddings,
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
             tf.get_variable_scope().reuse_variables()
 
@@ -237,7 +242,6 @@ def load_data(loc):
     trainS, devS, testS = [],[],[]
 
     with open(os.path.join(loc, 'snli_1.0_train.txt'), 'rb') as f:
-        skip=True
         for line in f:
             text = line.strip().split('\t')
             trainA.append(text[5])
@@ -302,11 +306,11 @@ def batchify(batchA, batchB, padding, tA, tB, idsA, idsB, lengthsA, lengthsB, ma
 
 
 # Create Model
-def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, embedding_mode, keep_prob,
+def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddings, embedding_mode, keep_prob,
                  initializer=tf.random_uniform_initializer(-0.05, 0.05)):
     with tf.variable_scope("model", initializer=initializer):
-        inpA = tf.placeholder(tf.float32, [length, None, cell.input_size])
-        inpB = tf.placeholder(tf.float32, [length, None, cell.input_size])
+        inpA = tf.placeholder(tf.float32, [length, None, cellA.input_size])
+        inpB = tf.placeholder(tf.float32, [length, None, cellB.input_size])
         idsA = tf.placeholder(tf.int32, [length, None])
         idsB = tf.placeholder(tf.int32, [length, None])
         lengthsA = tf.placeholder(tf.int32, [None])
@@ -315,13 +319,13 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
 #        lengths = tf.concat(0, [lengthsA, lengthsB])
         learning_rate = tf.get_variable("lr", (), tf.float32, tf.constant_initializer(learning_rate), trainable=False)
 
-        batch_size = tf.cast(tf.gather(tf.shape(inpA), [1]), tf.float32)
-        ids = tf.concat(1, [idsA, idsB])
+        batch_size = tf.gather(tf.shape(inpA), [1])
 
         keep_prob_var = tf.get_variable("keep_prob", (), initializer=tf.constant_initializer(keep_prob, tf.float32),
                                         trainable=False)
         if keep_prob < 1.0:
-            cell = DropoutWrapper(cell, keep_prob_var, keep_prob_var)
+            cellA = DropoutWrapper(cellA, keep_prob_var, keep_prob_var)
+            cellB = DropoutWrapper(cellB, keep_prob_var, keep_prob_var)
 
         def my_rnn(inp, ids, cell, lengths, embeddings, rev=False, init_state=None):
             if ids:
@@ -332,7 +336,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
                     inp = tf.nn.embedding_lookup(E, ids)
 
             if init_state is None:
-                init_state = tf.get_variable("init_state", [cell.state_size], tf.float32)
+                init_state = tf.zeros([cell.state_size], tf.float32)
                 batch_size = tf.gather(tf.shape(inp), [1])
                 init_state = tf.tile(init_state, batch_size)
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
@@ -345,11 +349,13 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
             return out, final_state
 
         with tf.variable_scope("premise", initializer=initializer):
-            premise, c = my_rnn(None if embedding_mode == "tuned" else inpA, None if embedding_mode == "fixed" else idsA, cell,
+            premise, c = my_rnn(None if embedding_mode == "tuned" else inpA, None if embedding_mode == "fixed" else idsA, cellA,
                                 lengthsA, embeddings)
 
         with tf.variable_scope("hypothesis", initializer=initializer):
-            hypothesis, _ = my_rnn(None if embedding_mode == "tuned" else inpB, None if embedding_mode == "fixed" else idsB, cell,
+            #if isinstance(cellB, ControlledAssociativeGRUCell):
+             #   c = tf.concat(1, [tf.zeros(tf.pack([batch_size, cellB.output_size])), c])
+            hypothesis, _ = my_rnn(None if embedding_mode == "tuned" else inpB, None if embedding_mode == "fixed" else idsB, cellB,
                                    lengthsB, embeddings, init_state=c)
 
         h = tf.concat(1, [premise, hypothesis])
@@ -359,7 +365,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
 
-        loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(scores, y)) / batch_size
+        loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(scores, y)) / tf.cast(batch_size, tf.float32)
         train_params = tf.trainable_variables()
         if l2_lambda > 0.0:
             l2_loss = l2_lambda * tf.reduce_sum(array_ops.pack([tf.nn.l2_loss(t) for t in train_params]))

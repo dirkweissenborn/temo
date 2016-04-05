@@ -101,6 +101,8 @@ def training(embeddings, FLAGS):
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+            elif FLAGS.cell == "AssociativeGRU":
+                cell = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cell, task_embeddings,
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
