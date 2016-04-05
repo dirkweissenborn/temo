@@ -6,6 +6,8 @@ import random
 from sklearn.utils import shuffle
 import os
 from tensorflow.python.ops.rnn import rnn
+import time
+import sys
 
 
 def encode(sentence, vocab, embeddings, fill_vocab=False):
@@ -160,7 +162,9 @@ def training(embeddings, FLAGS):
             i = 0
             accuracy = float("-inf")
             converged = False
+            step_time = 0.0
             while not converged:
+                start_time = time.time()
                 tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
                                                                   shuffledB[offset:offset+batch_size],
                                                                   vocab["<padding>"],
@@ -180,20 +184,25 @@ def training(embeddings, FLAGS):
                 offset += batch_size
                 loss += l
                 i += 1
+                step_time += (time.time() - start_time)
+
+                sys.stdout.write("\r%.1f%% Loss: %.3f" % ((i*100.0) / FLAGS.checkpoint, loss / i))
+                sys.stdout.flush()
+
                 if offset + batch_size > len(shuffledA):
                     epochs += 1
-                    print("%d epochs done" % epochs)
+                    print("\n%d epochs done" % epochs)
                     shuffledA, shuffledB, y = shuffle(shuffledA, shuffledB, y, random_state=rng2.randint(0, 1000))
                     offset = 0
-	        
                 if i == FLAGS.checkpoint:
                     loss /= i
                     sess.run(model["keep_prob"].assign(1.0))
                     acc = evaluate(devA, devB, y_scores[1])
                     sess.run(model["keep_prob"].initializer)
 
-                    print("Train loss: %.3f, Accuracy on Dev: %.3f" % (loss, acc))
+                    print("\nTrain loss: %.3f, Accuracy on Dev: %.3f, Step Time: %.3f" % (loss, acc, step_time/i))
                     i = 0
+                    step_time = 0.0
                     loss = 0.0
                     if acc > accuracy + 1e-5:
                         accuracy = acc
