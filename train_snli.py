@@ -361,7 +361,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddi
         h = tf.concat(1, [premise, hypothesis])
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
                                               weight_init=None)
-        scores = tf.contrib.layers.fully_connected(h, 3,weight_init=None)
+        scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
 

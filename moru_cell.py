@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
-import numpy as np
+import random
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -91,84 +91,15 @@ class MORUCell(RNNCell):
             return new_c, new_c
 
 
-class AssociativeMORUCell(RNNCell):
-
-    def __init__(self, num_units, input_size=None,
-                 op_controller_size=None,
-                 ops=(_operations["keep"], _operations["replace"], _operations["mul"]),
-                 op_biases=None):
-        self._num_units = num_units
-        self._input_size = num_units if input_size is None else input_size
-        self._op_controller_size = 0 if op_controller_size is None else op_controller_size
-        self._op_biases = op_biases
-        self._ops = ops if ops is not None else map(lambda _: 0.0, ops)
-        self._num_reads = 3
-
-    @staticmethod
-    def from_op_names(operations, biases, num_units, input_size=None, op_controller_size=None):
-        if biases is None:
-            biases = map(lambda _: 0.0, operations)
-        assert len(biases) == len(operations), "Operations and operation biases have to have same length."
-        ops = map(lambda op: _operations[op], operations)
-        return MORUCell(num_units, input_size, op_controller_size, ops, biases)
-
-    def _op_weights(self, inputs):
-        t = tf.reshape(linear(inputs, self._num_units * (len(self._ops)), True), [-1, self._num_units, len(self._ops)])
-        weights = tf.split(2, len(self._ops), t)
-        for i, w in enumerate(weights):
-            if self._op_biases and self._op_biases[i] != 0.0:
-                weights[i] = tf.exp((w + self._op_biases[i]))
-            else:
-                weights[i] = tf.exp(w)
-        acc = weights[0]
-        for w in weights[1:]:
-            acc += w
-        weights = map(lambda i: tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i), xrange(len(weights)))
-        return weights
-
-    @property
-    def input_size(self):
-        return self._input_size
-
-    @property
-    def output_size(self):
-        return self._num_units
-
-    @property
-    def state_size(self):
-        return self._num_units
-
-    def __call__(self, inputs, state, scope=None):
-        """Gated recurrent unit (GRU) with nunits cells."""
-        with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
-            s = complexify(state)
-            with vs.variable_scope("key"):
-                print("Associative MORU")
-                key = bound(linear([inputs, s], self._num_units, True))
-                old_f = key * s
-            with vs.variable_scope("Gates"):
-                r = sigmoid(linear([inputs, old_f], self._num_units, True, 1.0))
-            with vs.variable_scope("Feature"):
-                f = complexify(bound(linear([inputs, r * old_f], self._num_units, True)))
-
-            with vs.variable_scope("Op"):
-                op_weights = self._op_weights([f, old_f])
-                new_fs = map(lambda (o, w): o(old_f, f) * w, zip(self._ops, op_weights))
-                new_f = tf.reduce_sum(tf.pack(new_fs), [0])
-
-            s = s - old_f + new_f
-            s = tf.concat(1, [tf.real(s), tf.imag(s)])
-        return s, s
-
-
 class AssociativeGRUCell(RNNCell):
 
     def __init__(self, num_units, num_copies=1, input_size=None):
         self._num_units = num_units
         self._input_size = num_units if input_size is None else input_size
         self._num_copies = num_copies
-        self._permutations = [np.random.permutation(xrange(0, num_units)) for _ in xrange(self._num_copies)]
-        # permutations with transpose -> gather -> transpose
+        self._permutations = [list(xrange(0, num_units)) for _ in xrange(self._num_copies)]
+        for perm in self._permutations:
+            random.shuffle(perm)
 
     @property
     def input_size(self):
@@ -185,23 +116,23 @@ class AssociativeGRUCell(RNNCell):
     def __call__(self, inputs, state, scope=None):
         """Gated recurrent unit (GRU) with nunits cells."""
         with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
-            with vs.variable_scope("Permutations"):
-                perms = map(lambda perm: tf.constant(perm), self._permutations)
-
             split = tf.split(1, 1+self._num_copies, state)
             h = split[0]
             ss = [complexify(s) for s in split[1:]]
             with vs.variable_scope("Keys"):
-                k_tr = tf.transpose(bound(linear([inputs, h], self._num_units, True)))
+                k_tr = linear([inputs, h], self._num_units, True)
                 #k_tr_r, k_tr_w = tf.split(1, 2, k_tr)
                 #k_rs = []
+                k_split = tf.split(1, self._num_units, k_tr)
                 ks = []
-                for perm in perms:
-                    #k_rs.append(complexify(tf.transpose(tf.gather(k_tr_r, perm))))
-                    ks.append(complexify(tf.transpose(tf.gather(k_tr, perm))))
+                for perm in self._permutations:
+                    l = []
+                    for i in perm:
+                        l.append(k_split[i])
+                    ks.append(bound(complexify(tf.concat(1, l))))
 
             with vs.variable_scope("Read"):
-                old_f = self._read(map(tf.conj, ks), ss)
+                old_f = uncomplexify(self._read(map(tf.conj, ks), ss))
 
             with vs.variable_scope("Gates"):  # Reset gate and update gate.
                 # We start with bias of 1.0 to not reset and not update.
@@ -209,19 +140,19 @@ class AssociativeGRUCell(RNNCell):
                                                      2 * self._num_units, True, 1.0))
                 r, u = sigmoid(r), sigmoid(u)
             with vs.variable_scope("Candidate"):
-                c = bound(linear([inputs, r * old_f, h], self._num_units, True))
+                c = tanh(linear([inputs, r * old_f, h], self._num_units, True))
 
             to_add = u * (c - old_f)
             c_to_add = complexify(to_add)
-            new_ss = [uncomplexify(s + k_w * c_to_add) for k_w, s in zip(ks, ss)]
+            new_ss = [uncomplexify(s + k * c_to_add) for k, s in zip(ks, ss)]
             new_h = old_f + to_add
 
         return new_h, tf.concat(1, [new_h] + new_ss)
 
     def _read(self, keys, redundant_states):
-        read = uncomplexify(keys[0] * redundant_states[0])
+        read = keys[0] * redundant_states[0]
         for i in xrange(1, self._num_copies):
-            read = read + uncomplexify(tf.conj(keys[i]) * redundant_states[i])
+            read = read + tf.conj(keys[i]) * redundant_states[i]
         if self._num_copies > 1:
             read /= self._num_copies
         return read
@@ -237,9 +168,6 @@ class ControlledAssociativeGRUCell(AssociativeGRUCell):
         s = tf.slice(state, [0, self._num_units], [-1, -1])
         assoc_h, assoc_s = AssociativeGRUCell.__call__(self, inputs, s, scope)
         with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
-
-
-
             with vs.variable_scope("Controller"):  # "GRUCell"
                 with vs.variable_scope("Gates"):  # Reset gate and update gate.
                     # We start with bias of 1.0 to not reset and not update.
@@ -262,9 +190,8 @@ def uncomplexify(v):
 
 
 def bound(v):
-    v_sqr = v * v
-    v1, v2 = tf.split(1, 2, v_sqr)
-    v_sqrt = tf.concat(1, [tf.sqrt(v1 + v2)])
-    v_sqrt = tf.concat(1, [v_sqrt, v_sqrt])
-    return v/v_sqrt
+    im_v = tf.imag(v)
+    re_v = tf.real(v)
+    v_sqrt = tf.maximum(1.0, tf.sqrt(im_v * im_v + re_v * re_v))
+    return tf.complex(re_v / v_sqrt, im_v / v_sqrt)
 
