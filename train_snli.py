@@ -10,55 +10,58 @@ import time
 import sys
 
 
-def encode(sentence, vocab, embeddings, fill_vocab=False):
-    words = []
-    word_ids = []
-    embedding_size = embeddings.vectors.shape[1]
-    if "<unk>" not in vocab:
-        vocab["<unk>"] = len(vocab)
-    if "<padding>" not in vocab:
-        vocab["<padding>"] = len(vocab)
-    for w in nltk.word_tokenize(sentence.lower()):
-        if fill_vocab and w not in vocab:
-            vocab[w] = len(vocab)
-        wv = embeddings.get(w, np.zeros(embedding_size))
-        words.append(wv)
-        word_ids.append(vocab.get(w, vocab["<unk>"]))
-    return words, word_ids
-
-
 def training(embeddings, FLAGS):
     # Load data
     print("Preparing data...")
     train, dev, test, y_scores = load_data(FLAGS.data)
     embedding_size = embeddings.vectors.shape[1]
 
-    vocab = dict()
-    trainA, trainB = map(lambda s: encode(s, vocab, embeddings, True), train[0]), map(lambda s: encode(s, vocab, embeddings, True), train[1])
-    devA, devB = map(lambda s: encode(s, vocab, embeddings), dev[0]), map(lambda s: encode(s, embeddings, vocab), dev[1])
-    testA, testB = map(lambda s: encode(s, vocab, embeddings), test[0]), map(lambda s: encode(s, embeddings, vocab), test[1])
-    
+    # Encode data
+    def encode(sentence, vocab, oo_vocab):
+        if "<s>" not in vocab:
+            oo_vocab["<s>"] = len(oo_vocab)
+        if "</s>" not in vocab:
+            oo_vocab["</s>"] = len(oo_vocab)
+        word_ids = [oo_vocab["<s>"]]
+        for w in nltk.word_tokenize(sentence.lower()):
+            wv = embeddings.get(w)
+            if wv is None:
+                if w not in oo_vocab:
+                    oo_vocab[w] = len(oo_vocab)
+                word_ids.append(-oo_vocab[w])
+            else:
+                if w not in vocab:
+                    vocab[w] = len(vocab)
+                word_ids.append(vocab[w])
+        word_ids.append(oo_vocab["</s>"])
+        return word_ids
+
+    vocab, oo_vocab = dict(), dict()
+    trainA, trainB = map(lambda s: encode(s, vocab, oo_vocab), train[0]), map(lambda s: encode(s, vocab, oo_vocab), train[1])
+    devA, devB = map(lambda s: encode(s, vocab, oo_vocab), dev[0]), map(lambda s: encode(s, vocab, oo_vocab), dev[1])
+    testA, testB = map(lambda s: encode(s,vocab, oo_vocab), test[0]), map(lambda s: encode(s, vocab, oo_vocab), test[1])
+
+    def normalize_ids(ds):
+        for word_ids in ds:
+            for i in xrange(len(word_ids)):
+                word_ids[i] += len(oo_vocab)
+
+    normalize_ids(trainA)
+    normalize_ids(trainB)
+    normalize_ids(devA)
+    normalize_ids(devB)
+    normalize_ids(testA)
+    normalize_ids(testB)
+
     # embeddings
-    task_embeddings = None
-    if FLAGS.embedding_mode != "combined":
-        task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
-        for w, i in vocab.iteritems():
-            e = embeddings.get(w, embeddings.get(w.lower()))
-            if e is None:
-                print("Not in embeddings: " + w)
-                if FLAGS.embedding_mode == "tuned":
-                    e = np.random.uniform(-0.05, 0.05, embedding_size).astype("float32")
-                else:
-                    e = np.zeros((embedding_size,), np.float32)
-            task_embeddings[i] = e
-    else:
-        task_embeddings = np.random.uniform(-0.05, 0.05, len(vocab) * FLAGS.tunable_dim)
-        task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")
+    task_embeddings = np.random.uniform(-0.05, 0.05, [len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
+    for w, i in vocab.iteritems():
+        task_embeddings[len(oo_vocab) + i] = embeddings[w]
 
     # accumulate counts for buckets
-    def max_length(sentences, max_l = 0):
+    def max_length(sentences, max_l=0):
         for s in sentences:
-            l = len(s[0])
+            l = len(s)
             max_l = max(l, max_l)
         return max_l
 
@@ -89,8 +92,6 @@ def training(embeddings, FLAGS):
             rng2 = random.Random(rng.randint(0, 10000))
 
             input_size = embedding_size
-            if FLAGS.embedding_mode == "combined":
-                input_size = embedding_size + task_embeddings.shape[1]
             cellA = cellB = None
             if FLAGS.cell == 'LSTM':
                 cellA = cellB = BasicLSTMCell(mem_size, embedding_size)
@@ -104,10 +105,14 @@ def training(embeddings, FLAGS):
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
                 cellA = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
-                cellB = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
+                cellB = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size, read_only=True)
 
-            model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, task_embeddings,
-                                 FLAGS.embedding_mode, FLAGS.keep_prob)
+            tunable_embeddings, fixed_embeddings = task_embeddings, None
+            if FLAGS.embedding_mode == "fixed":
+                tunable_embeddings, fixed_embeddings = task_embeddings[:len(oo_vocab)], task_embeddings[len(oo_vocab):]
+
+            model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
+                                 fixed_embeddings, FLAGS.keep_prob)
             tf.get_variable_scope().reuse_variables()
 
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
@@ -130,9 +135,7 @@ def training(embeddings, FLAGS):
                     allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA), np.min(lengthsB)))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
-                                    feed_dict={model["inpA"]: tA[:,:size],
-                                               model["inpB"]: tB[:,:size],
-                                               model["idsA"]: idsA[:,:size],
+                                    feed_dict={model["idsA"]: idsA[:,:size],
                                                model["idsB"]: idsB[:,:size],
                                                model["lengthsA"]: lengthsA[:size],
                                                model["lengthsB"]: lengthsB[:size]})
@@ -161,21 +164,17 @@ def training(embeddings, FLAGS):
             epochs = 0
             i = 0
             accuracy = float("-inf")
-            converged = False
             step_time = 0.0
-            while not converged:
+            while True:
                 start_time = time.time()
-                tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
-                                                                  shuffledB[offset:offset+batch_size],
-                                                                  vocab["<padding>"],
-                                                                  tA, tB, idsA, idsB, lengthsA, lengthsB,
-                                                                  max_length=max_l,
-                                                                  max_batch_size=batch_size)
+                idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
+                                                          shuffledB[offset:offset+batch_size],
+                                                          idsA, idsB, lengthsA, lengthsB,
+                                                          max_length=max_l,
+                                                          max_batch_size=batch_size)
                 train_labels = encode_labels(y[offset:offset+batch_size])
                 l, _ = sess.run([model["loss"], model["update"]],
-                                feed_dict={model["inpA"]:tA,
-                                           model["inpB"]:tB,
-                                           model["idsA"]:idsA,
+                                feed_dict={model["idsA"]:idsA,
                                            model["idsB"]:idsB,
                                            model["lengthsA"]: lengthsA,
                                            model["lengthsB"]: lengthsB,
@@ -272,7 +271,6 @@ def load_data(loc):
     return [trainA[1:], trainB[1:]], [devA[1:], devB[1:]], [testA[1:], testB[1:]], [trainS[1:], devS[1:], testS[1:]]
 
 
-
 def encode_labels(labels):
     Y = np.zeros([len(labels)]).astype('int64')
     for j, y in enumerate(labels):
@@ -286,49 +284,37 @@ def encode_labels(labels):
 
 
 #create batch given example sentences
-def batchify(batchA, batchB, padding, tA, tB, idsA, idsB, lengthsA, lengthsB, max_length=None, max_batch_size=None):
-    embedding_size = batchA[0][0][0].shape[0]
-
-    tA = np.zeros([max_length, max_batch_size, embedding_size]) if tA is None else tA
-    tB = np.zeros([max_length, max_batch_size, embedding_size]) if tB is None else tB
+def batchify(batchA, batchB, idsA, idsB, lengthsA, lengthsB, max_length=None, max_batch_size=None):
     idsA = np.ones([max_length, max_batch_size]) if idsA is None else idsA
     idsB = np.ones([max_length, max_batch_size]) if idsB is None else idsB
-    idsA *= padding
-    idsB *= padding
 
     lengthsA = np.zeros([max_batch_size], np.int32) if lengthsA is None else lengthsA
     lengthsB = np.zeros([max_batch_size], np.int32) if lengthsB is None else lengthsB
 
     for i in xrange(len(batchA)):
-        lengthsA[i] = len(batchA[i][0])
-        for j in xrange(len(batchA[i][0])):
-            tA[j][i] = batchA[i][0][j]
-            idsA[j][i] = batchA[i][1][j]
+        lengthsA[i] = len(batchA[i])
+        for j in xrange(len(batchA[i])):
+            idsA[j][i] = batchA[i][j]
 
     for i in xrange(len(batchB)):
-        lengthsB[i] = len(batchB[i][0])
-        for j in xrange(len(batchB[i][0])):
-            tB[j][i] = batchB[i][0][j]
-            idsB[j][i] = batchB[i][1][j]
+        lengthsB[i] = len(batchB[i])
+        for j in xrange(len(batchB[i])):
+            idsB[j][i] = batchB[i][j]
 
-    return tA, tB, idsA, idsB, lengthsA, lengthsB
+    return idsA, idsB, lengthsA, lengthsB
 
 
 # Create Model
-def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddings, embedding_mode, keep_prob,
+def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings, fixed_embeddings, keep_prob,
                  initializer=tf.random_uniform_initializer(-0.05, 0.05)):
     with tf.variable_scope("model", initializer=initializer):
-        inpA = tf.placeholder(tf.float32, [length, None, cellA.input_size])
-        inpB = tf.placeholder(tf.float32, [length, None, cellB.input_size])
         idsA = tf.placeholder(tf.int32, [length, None])
         idsB = tf.placeholder(tf.int32, [length, None])
         lengthsA = tf.placeholder(tf.int32, [None])
         lengthsB = tf.placeholder(tf.int32, [None])
-#        inp = tf.concat(1, [inpA, inpB])
-#        lengths = tf.concat(0, [lengthsA, lengthsB])
         learning_rate = tf.get_variable("lr", (), tf.float32, tf.constant_initializer(learning_rate), trainable=False)
 
-        batch_size = tf.gather(tf.shape(inpA), [1])
+        batch_size = tf.gather(tf.shape(idsA), [1])
 
         keep_prob_var = tf.get_variable("keep_prob", (), initializer=tf.constant_initializer(keep_prob, tf.float32),
                                         trainable=False)
@@ -336,13 +322,18 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddi
             cellA = DropoutWrapper(cellA, keep_prob_var, keep_prob_var)
             cellB = DropoutWrapper(cellB, keep_prob_var, keep_prob_var)
 
-        def my_rnn(inp, ids, cell, lengths, embeddings, rev=False, init_state=None):
-            if ids:
-                E = tf.get_variable("E_w", initializer=tf.identity(embeddings), trainable=True)
-                if inp:
-                    inp = tf.concat(2, [tf.nn.embedding_lookup(E, ids), inp])
+        def my_rnn(ids, cell, lengths, rev=False, init_state=None):
+            E = None
+            if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
+                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
+            if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
+                E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
+                if E is not None:
+                    E = tf.concat(0, [E_tune, E])
                 else:
-                    inp = tf.nn.embedding_lookup(E, ids)
+                    E = E_tune
+
+            inp = tf.nn.embedding_lookup(E, ids)
 
             if init_state is None:
                 init_state = tf.zeros([cell.state_size], tf.float32)
@@ -358,14 +349,10 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddi
             return out, final_state
 
         with tf.variable_scope("premise", initializer=initializer):
-            premise, c = my_rnn(None if embedding_mode == "tuned" else inpA, None if embedding_mode == "fixed" else idsA, cellA,
-                                lengthsA, embeddings)
+            premise, c = my_rnn(idsA, cellA, lengthsA)
 
         with tf.variable_scope("hypothesis", initializer=initializer):
-            #if isinstance(cellB, ControlledAssociativeGRUCell):
-             #   c = tf.concat(1, [tf.zeros(tf.pack([batch_size, cellB.output_size])), c])
-            hypothesis, _ = my_rnn(None if embedding_mode == "tuned" else inpB, None if embedding_mode == "fixed" else idsB, cellB,
-                                   lengthsB, embeddings, init_state=c)
+            hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
         h = tf.concat(1, [premise, hypothesis])
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
@@ -381,7 +368,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, embeddi
             loss = loss+l2_loss
 
     update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params)
-    return {"inpA":inpA, "inpB":inpB, "idsA":idsA, "idsB":idsB, "lengthsA":lengthsA, "lengthsB":lengthsB, "y":y,
+    return {"idsA":idsA, "idsB":idsB, "lengthsA":lengthsA, "lengthsB":lengthsB, "y":y,
             "probs":probs, "scores":scores,"keep_prob": keep_prob_var,
             "loss":loss, "update":update}
 

@@ -2,8 +2,6 @@ import train_snli
 import tensorflow as tf
 import web.embeddings
 import web.embedding
-import os
-import numpy as np
 import nltk
 
 # data loading specifics
@@ -29,7 +27,7 @@ print "Done."
 
 embedding_size = embeddings.vectors.shape[1]
 
-print "Collecting necessary embeddings for sick task..."
+print "Collecting necessary embeddings for SNLI task..."
 sick_embeddings = dict()
 
 
@@ -37,12 +35,14 @@ def fill_vocab(dataset):
     for sentence in dataset:
         for w in nltk.word_tokenize(sentence):
             if w not in sick_embeddings:
-                wv = embeddings.get(w, embeddings.get(w.lower(), np.random.uniform(-0.05, 0.05, embedding_size)))
-                sick_embeddings[w] = wv
+                wv = embeddings.get(w)
+                if wv is not None:
+                    sick_embeddings[w] = wv
             w = w.lower()
             if w not in sick_embeddings:
-                wv = embeddings.get(w, np.random.uniform(-0.05, 0.05, embedding_size))
-                sick_embeddings[w] = wv
+                wv = embeddings.get(w)
+                if wv is not None:
+                    sick_embeddings[w] = wv
 
 fill_vocab(trainA)
 fill_vocab(trainB)
