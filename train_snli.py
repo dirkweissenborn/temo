@@ -119,18 +119,18 @@ def training(embeddings, FLAGS):
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
 
             def evaluate(dsA, dsB, _scores):
-                tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
+                idsA, idsB, lengthsA, lengthsB = None, None, None, None
                 e_off = 0
                 accuracy = 0.0
                 y = encode_labels(_scores)
                 op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
 
                 while e_off < len(dsA):
-                    tA, tB, idsA, idsB, lengthsA, lengthsB = batchify(dsA[e_off:e_off + batch_size],
-                                                                      dsB[e_off:e_off + batch_size],
-                                                                      vocab["<padding>"],
-                                                                      tA, tB, idsA, idsB, lengthsA, lengthsB,
-                                                                      max_length=max_l, max_batch_size=batch_size)
+                    idsA, idsB, lengthsA, lengthsB = batchify(dsA[e_off:e_off + batch_size],
+                                                              dsB[e_off:e_off + batch_size],
+                                                              idsA, idsB, lengthsA, lengthsB,
+                                                              max_length=max_l,
+                                                              max_batch_size=batch_size)
                     size = min(len(dsA) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA), np.min(lengthsB)))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
