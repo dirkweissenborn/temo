@@ -111,27 +111,30 @@ class AssociativeGRUCell(RNNCell):
 
     @property
     def state_size(self):
-        return self._num_units * (self._num_copies+1)
+        return self._num_units * (self._num_copies+2)
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or type(self).__name__):
             with vs.variable_scope("Permutations"):
-                perms = map(lambda perm: tf.constant(perm), self._permutations)
+                perms = reduce(lambda x,y: x+y, self._permutations)
+                perms = tf.constant(perms)
 
-            split = tf.split(1, 1+self._num_copies, state)
-            h = split[0]
-            ss = [complexify(s) for s in split[1:]]
+            split = tf.split(1, 2+self._num_copies, state)
+            h = tf.slice(state, [0,0],[-1,self.output_size])
+            old_key = tf.slice(state, [0,self.output_size],[-1,self.output_size]) 
+            ss = complexify(tf.slice(state, [0,self.output_size*2], [-1,-1]))
             with vs.variable_scope("Keys"):
-                k = bound(complexify(linear([inputs, h], self._num_units, True)))
-                with tf.device("/cpu:0"):
-                    k_real = tf.transpose(tf.real(k))
-                    k_imag = tf.transpose(tf.imag(k))
-                    ks = []
-                    for perm in perms:
-                        ks.append(tf.complex(tf.transpose(tf.gather(k_real, perm)), tf.transpose(tf.gather(k_imag, perm))))
+                key = bound(complexify(linear([inputs, old_key], self._num_units, True)))
+               # with tf.device("/cpu:0"):
+                k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
+                k_real, k_imag = tf.split(0, 2, tf.transpose(tf.nn.embedding_lookup(k, perms)))
+                ks = tf.complex(k_real, k_imag)
+		#ks_real = self._num_copies
+		#ks_imag = tf.split(1, self._num_copies, k_imag)
+ 		#ks = [tf.complex(r,i) for r,i in zip(ks_real, ks_imag)]
 
             with vs.variable_scope("Read"):
-                old_f = uncomplexify(self._read(map(tf.conj, ks), ss))
+                old_f = uncomplexify(self._read(tf.conj(ks), ss))
 
             with vs.variable_scope("Gates"):  # Reset gate and update gate.
                 # We start with bias of 1.0 to not reset and not update.
@@ -139,20 +142,23 @@ class AssociativeGRUCell(RNNCell):
                                                      2 * self._num_units, True, 1.0))
                 r, u = sigmoid(r), sigmoid(u)
             with vs.variable_scope("Candidate"):
-                c = tanh(linear([inputs, r * old_f, h], self._num_units, True))
+                c = tanh(linear([inputs, r * old_f], self._num_units, True))
 
             to_add = u * (c - old_f)
-            c_to_add = complexify(to_add)
-            new_ss = [uncomplexify(s + k * c_to_add) for k, s in zip(ks, ss)]
+            to_add_r, to_add_i = tf.split(1, 2, to_add)
+            c_to_add = tf.complex(tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
+            new_ss = uncomplexify(ss + ks * c_to_add)
             new_h = old_f + to_add
 
-        return new_h, tf.concat(1, [new_h] + new_ss)
+        return new_h, tf.concat(1, [new_h, uncomplexify(key), new_ss])
 
     def _read(self, keys, redundant_states):
-        read = keys[0] * redundant_states[0]
-        for i in xrange(1, self._num_copies):
-            read = read + tf.conj(keys[i]) * redundant_states[i]
-        if self._num_copies > 1:
+        read = keys * redundant_states
+	if self._num_copies > 1:
+            reads = tf.split(1, self._num_copies, read)
+	    read = reads[0]
+	    for i in xrange(1, self._num_copies):
+	        read += reads[i]
             read /= self._num_copies
         return read
 
@@ -160,7 +166,7 @@ class AssociativeGRUCell(RNNCell):
 class ControlledAssociativeGRUCell(AssociativeGRUCell):
     @property
     def state_size(self):
-        return self._num_units * (self._num_copies+2)
+        return self._num_units * (self._num_copies+3)
 
     def __call__(self, inputs, state, scope=None):
         h = tf.slice(state, [0, 0], [-1, self._num_units])
