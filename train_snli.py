@@ -68,7 +68,7 @@ def training(embeddings, FLAGS):
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
                 cellA = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
-                cellB = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size, read_only=True)
+                cellB = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -119,6 +119,7 @@ def training(embeddings, FLAGS):
             sess.run(tf.initialize_all_variables())
             num_params = reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
             print("Num params: %d" % num_params)
+            print("Num params (without OOV): %d" % (num_params - len(oo_vocab) * embedding_size))
 
             shuffledA, shuffledB, y = \
                 shuffle(list(trainA), list(trainB), list(y_scores[0]), random_state=rng2.randint(0, 1000))
@@ -359,21 +360,27 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             #last_out = tf.reduce_sum(tf.pack(outs), [0]) / tf.cast(tf.reshape(tf.tile(lengths, [cell.output_size]), [-1, cell.output_size]) , tf.float32)
             return last_out, final_state, outs
 
-        with tf.variable_scope("assoc_m", initializer=initializer):
-            _, c, outsA = my_rnn(idsA, cellA, lengthsA)
-            tf.get_variable_scope().reuse_variables()
-            rest_state = tf.zeros([cellA.output_size], tf.float32)
-            rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellA.output_size])
-            c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
-            _, _, outsB = my_rnn(idsB, cellB, lengthsB, init_state=c)
+        if isinstance(cellA, AssociativeGRUCell):
+            with tf.variable_scope("assoc_m", initializer=initializer):
+                _, c, outsA = my_rnn(idsA, cellA, lengthsA)
+                tf.get_variable_scope().reuse_variables()
+                rest_state = tf.zeros([cellA.output_size], tf.float32)
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellA.output_size])
+                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
+                _, _, outsB = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
-        with tf.variable_scope("premise", initializer=initializer):
-            p, _, _ = my_rnn(idsA, GRUCell(cellA.output_size, cellA.output_size + cellA.input_size),
-                             lengthsA, additional_inputs=tf.pack(outsA))
+            with tf.variable_scope("premise", initializer=initializer):
+                p, _, _ = my_rnn(idsA, GRUCell(cellA.output_size, cellA.output_size + cellA.input_size),
+                                 lengthsA, additional_inputs=tf.pack(outsA))
 
-        with tf.variable_scope("hypothesis", initializer=initializer):
-            h, _, _ = my_rnn(idsB, GRUCell(cellB.output_size, cellB.output_size + cellB.input_size),
-                             lengthsB, additional_inputs=tf.pack(outsB), init_state=p)
+            with tf.variable_scope("hypothesis", initializer=initializer):
+                h, _, _ = my_rnn(idsB, GRUCell(cellB.output_size, cellB.output_size + cellB.input_size),
+                                 lengthsB, additional_inputs=tf.pack(outsB), init_state=p)
+        else:
+            with tf.variable_scope("premise", initializer=initializer):
+                p, _, _ = my_rnn(idsA, cellA, lengthsA)
+            with tf.variable_scope("hypothesis", initializer=initializer):
+                h, _, _ = my_rnn(idsB, cellB, lengthsB, init_state=p)
 
 
         #with tf.variable_scope("hypothesis", initializer=initializer):
