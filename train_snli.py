@@ -76,7 +76,6 @@ def training(embeddings, FLAGS):
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
                                  fixed_embeddings, FLAGS.keep_prob)
-            tf.get_variable_scope().reuse_variables()
 
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
@@ -118,6 +117,8 @@ def training(embeddings, FLAGS):
 
             saver = tf.train.Saver(tf.trainable_variables())
             sess.run(tf.initialize_all_variables())
+            num_params = reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
+            print("Num params: %d" % num_params)
 
             shuffledA, shuffledB, y = \
                 shuffle(list(trainA), list(trainB), list(y_scores[0]), random_state=rng2.randint(0, 1000))
@@ -310,6 +311,7 @@ def batchify(batchA, batchB, idsA, idsB, lengthsA, lengthsB, max_length=None, ma
 
     return idsA, idsB, lengthsA, lengthsB
 
+
 # Create Model
 def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings, fixed_embeddings, keep_prob,
                  initializer=tf.random_uniform_initializer(-0.05, 0.05)):
@@ -328,7 +330,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             cellA = DropoutWrapper(cellA, keep_prob_var, keep_prob_var)
             cellB = DropoutWrapper(cellB, keep_prob_var, keep_prob_var)
 
-        def my_rnn(ids, cell, lengths, rev=False, init_state=None):
+        def my_rnn(ids, cell, lengths, additional_inputs=None, rev=False, init_state=None):
             E = None
             if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
                 E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
@@ -340,27 +342,45 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                     E = E_tune
 
             inp = tf.nn.embedding_lookup(E, ids)
+            if additional_inputs is not None:
+                inp = tf.concat(2, [inp, additional_inputs])
 
             if init_state is None:
                 init_state = tf.zeros([cell.state_size], tf.float32)
-                batch_size = tf.gather(tf.shape(inp), [1])
                 init_state = tf.tile(init_state, batch_size)
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
 
             inps = tf.split(0, length, inp)
             for i in xrange(length):
                 inps[i] = tf.squeeze(inps[i], [0])
-            _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
-            out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
-            return out, final_state
+            outs, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
+            last_out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
+            # mean pooling
+            #last_out = tf.reduce_sum(tf.pack(outs), [0]) / tf.cast(tf.reshape(tf.tile(lengths, [cell.output_size]), [-1, cell.output_size]) , tf.float32)
+            return last_out, final_state, outs
+
+        with tf.variable_scope("assoc_m", initializer=initializer):
+            _, c, outsA = my_rnn(idsA, cellA, lengthsA)
+            tf.get_variable_scope().reuse_variables()
+            rest_state = tf.zeros([cellA.output_size], tf.float32)
+            rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellA.output_size])
+            c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
+            _, _, outsB = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
         with tf.variable_scope("premise", initializer=initializer):
-            premise, c = my_rnn(idsA, cellA, lengthsA)
+            p, _, _ = my_rnn(idsA, GRUCell(cellA.output_size, cellA.output_size + cellA.input_size),
+                             lengthsA, additional_inputs=tf.pack(outsA))
 
         with tf.variable_scope("hypothesis", initializer=initializer):
-            hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
+            h, _, _ = my_rnn(idsB, GRUCell(cellB.output_size, cellB.output_size + cellB.input_size),
+                             lengthsB, additional_inputs=tf.pack(outsB), init_state=p)
 
-        h = tf.concat(1, [premise, hypothesis])
+
+        #with tf.variable_scope("hypothesis", initializer=initializer):
+         #   hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
+
+        h = tf.concat(1, [p, h])
+        #h = hypothesis
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
                                               weight_init=None)
         scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
