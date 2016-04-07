@@ -67,8 +67,8 @@ def training(embeddings, FLAGS):
                 ops = FLAGS.moru_ops.split(",")
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
-                cellB = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
+                cellA = AssociativeGRUCell(mem_size, num_copies=8, input_size=input_size, rng=random.Random(123))
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=8, input_size=input_size, rng=random.Random(123))
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -76,6 +76,8 @@ def training(embeddings, FLAGS):
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
                                  fixed_embeddings, FLAGS.keep_prob)
+
+            tf.get_variable_scope().reuse_variables()
 
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
@@ -327,24 +329,25 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         keep_prob_var = tf.get_variable("keep_prob", (), initializer=tf.constant_initializer(keep_prob, tf.float32),
                                         trainable=False)
-        if keep_prob < 1.0:
-            cellA = DropoutWrapper(cellA, keep_prob_var, keep_prob_var)
-            cellB = DropoutWrapper(cellB, keep_prob_var, keep_prob_var)
 
         def my_rnn(ids, cell, lengths, additional_inputs=None, rev=False, init_state=None):
-            E = None
-            if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
-                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
-            if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
-                E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
-                if E is not None:
-                    E = tf.concat(0, [E_tune, E])
-                else:
-                    E = E_tune
+            inp = None
+            if ids is not None:
+                E = None
+                if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
+                    E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
+                if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
+                    E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
+                    if E is not None:
+                        E = tf.concat(0, [E_tune, E])
+                    else:
+                        E = E_tune
 
-            inp = tf.nn.embedding_lookup(E, ids)
-            if additional_inputs is not None:
-                inp = tf.concat(2, [inp, additional_inputs])
+                inp = tf.nn.embedding_lookup(E, ids)
+                if additional_inputs is not None:
+                    inp = tf.concat(2, [inp, additional_inputs])
+            else:
+                inp = additional_inputs
 
             if init_state is None:
                 init_state = tf.zeros([cell.state_size], tf.float32)
@@ -361,32 +364,40 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             return last_out, final_state, outs
 
         if isinstance(cellA, AssociativeGRUCell):
+            print("Use AssociativeGRU")
+            if keep_prob < 1.0:
+                cellA = DropoutWrapper(cellA, keep_prob_var)
+                cellB = DropoutWrapper(cellB, keep_prob_var)
             with tf.variable_scope("assoc_m", initializer=initializer):
                 _, c, outsA = my_rnn(idsA, cellA, lengthsA)
                 tf.get_variable_scope().reuse_variables()
-                rest_state = tf.zeros([cellA.output_size], tf.float32)
-                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellA.output_size])
-                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
+                rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size/2], tf.float32)
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size/2])
+                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size/2], [-1, -1])])
                 _, _, outsB = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
-            with tf.variable_scope("premise", initializer=initializer):
-                p, _, _ = my_rnn(idsA, GRUCell(cellA.output_size, cellA.output_size + cellA.input_size),
-                                 lengthsA, additional_inputs=tf.pack(outsA))
+#            with tf.variable_scope("premise", initializer=initializer):
+ #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
+  #                               lengthsA, additional_inputs=tf.pack(outsA))
 
             with tf.variable_scope("hypothesis", initializer=initializer):
-                h, _, _ = my_rnn(idsB, GRUCell(cellB.output_size, cellB.output_size + cellB.input_size),
-                                 lengthsB, additional_inputs=tf.pack(outsB), init_state=p)
+                h, _, _ = my_rnn(None, GRUCell(cellB.output_size/3, cellB.output_size),
+                                 lengthsB, additional_inputs=tf.pack(outsB)) #, init_state=s)
         else:
+            if keep_prob < 1.0:
+                cellA = DropoutWrapper(cellA, keep_prob_var)
+                cellB = DropoutWrapper(cellB, keep_prob_var)
             with tf.variable_scope("premise", initializer=initializer):
-                p, _, _ = my_rnn(idsA, cellA, lengthsA)
+                p, s, _ = my_rnn(idsA, cellA, lengthsA)
             with tf.variable_scope("hypothesis", initializer=initializer):
-                h, _, _ = my_rnn(idsB, cellB, lengthsB, init_state=p)
+                h, _, _ = my_rnn(idsB, cellB, lengthsB, init_state=s)
+
 
 
         #with tf.variable_scope("hypothesis", initializer=initializer):
          #   hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
-        h = tf.concat(1, [p, h])
+        #h = tf.concat(1, [p, h])
         #h = hypothesis
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
                                               weight_init=None)
