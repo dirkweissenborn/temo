@@ -13,45 +13,8 @@ import sys
 def training(embeddings, FLAGS):
     # Load data
     print("Preparing data...")
-    train, dev, test, y_scores = load_data(FLAGS.data)
     embedding_size = embeddings.vectors.shape[1]
-
-    # Encode data
-    def encode(sentence, vocab, oo_vocab):
-        if "<s>" not in vocab:
-            oo_vocab["<s>"] = len(oo_vocab)
-        if "</s>" not in vocab:
-            oo_vocab["</s>"] = len(oo_vocab)
-        word_ids = [oo_vocab["<s>"]]
-        for w in nltk.word_tokenize(sentence.lower()):
-            wv = embeddings.get(w)
-            if wv is None:
-                if w not in oo_vocab:
-                    oo_vocab[w] = len(oo_vocab)
-                word_ids.append(-oo_vocab[w])
-            else:
-                if w not in vocab:
-                    vocab[w] = len(vocab)
-                word_ids.append(vocab[w])
-        word_ids.append(oo_vocab["</s>"])
-        return word_ids
-
-    vocab, oo_vocab = dict(), dict()
-    trainA, trainB = map(lambda s: encode(s, vocab, oo_vocab), train[0]), map(lambda s: encode(s, vocab, oo_vocab), train[1])
-    devA, devB = map(lambda s: encode(s, vocab, oo_vocab), dev[0]), map(lambda s: encode(s, vocab, oo_vocab), dev[1])
-    testA, testB = map(lambda s: encode(s,vocab, oo_vocab), test[0]), map(lambda s: encode(s, vocab, oo_vocab), test[1])
-
-    def normalize_ids(ds):
-        for word_ids in ds:
-            for i in xrange(len(word_ids)):
-                word_ids[i] += len(oo_vocab)
-
-    normalize_ids(trainA)
-    normalize_ids(trainB)
-    normalize_ids(devA)
-    normalize_ids(devB)
-    normalize_ids(testA)
-    normalize_ids(testB)
+    trainA, trainB, devA, devB, testA, testB, y_scores, vocab, oo_vocab = load_data(FLAGS.data, embeddings)
 
     # embeddings
     task_embeddings = np.random.uniform(-0.05, 0.05, [len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
@@ -83,7 +46,7 @@ def training(embeddings, FLAGS):
 
     accuracies = []
 
-    tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
+    idsA, idsB, lengthsA, lengthsB = None, None, None, None
 
     for run_id in xrange(FLAGS.runs):
         tf.reset_default_graph()
@@ -104,8 +67,8 @@ def training(embeddings, FLAGS):
                 ops = FLAGS.moru_ops.split(",")
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
-                cellB = ControlledAssociativeGRUCell(mem_size, num_copies=4, input_size=input_size, read_only=True)
+                cellA = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
+                cellB = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size, read_only=True)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -219,7 +182,6 @@ def training(embeddings, FLAGS):
             print '######## Run %d #########' % run_id
             print 'Test Accuracy: %.4f' % acc
             print '########################'
-            os.remove('/tmp/my-model')
 
     mean_accuracy = sum(accuracies) / len(accuracies)
 
@@ -242,7 +204,7 @@ def training(embeddings, FLAGS):
     return mean_accuracy
 
 
-def load_data(loc):
+def load_data(loc, embeddings):
     """
     Load the SNLI dataset
     """
@@ -252,23 +214,68 @@ def load_data(loc):
     with open(os.path.join(loc, 'snli_1.0_train.txt'), 'rb') as f:
         for line in f:
             text = line.strip().split('\t')
-            trainA.append(text[5])
-            trainB.append(text[6])
-            trainS.append(text[0])
+            if text[0] != '-':
+                trainA.append(text[5])
+                trainB.append(text[6])
+                trainS.append(text[0])
     with open(os.path.join(loc, 'snli_1.0_dev.txt'), 'rb') as f:
         for line in f:
             text = line.strip().split('\t')
-            devA.append(text[5])
-            devB.append(text[6])
-            devS.append(text[0])
+            if text[0] != '-':
+                devA.append(text[5])
+                devB.append(text[6])
+                devS.append(text[0])
     with open(os.path.join(loc, 'snli_1.0_test.txt'), 'rb') as f:
         for line in f:
             text = line.strip().split('\t')
-            testA.append(text[5])
-            testB.append(text[6])
-            testS.append(text[0])
+            if text[0] != '-':
+                testA.append(text[5])
+                testB.append(text[6])
+                testS.append(text[0])
 
-    return [trainA[1:], trainB[1:]], [devA[1:], devB[1:]], [testA[1:], testB[1:]], [trainS[1:], devS[1:], testS[1:]]
+    vocab, oo_vocab = dict(), dict()
+    def encode(sentence):
+        if "<s>" not in oo_vocab:
+            oo_vocab["<s>"] = len(oo_vocab)
+        if "</s>" not in oo_vocab:
+            oo_vocab["</s>"] = len(oo_vocab)
+        word_ids = [-oo_vocab["<s>"]-1]
+        for w in nltk.word_tokenize(sentence.lower()):
+            wv = embeddings.get(w)
+            if wv is None:
+                if w not in oo_vocab:
+                    oo_vocab[w] = len(oo_vocab)
+                word_ids.append(-oo_vocab[w]-1)
+            else:
+                if w not in vocab:
+                    vocab[w] = len(vocab)
+                word_ids.append(vocab[w])
+        word_ids.append(-oo_vocab["</s>"]-1)
+        return word_ids
+
+    trainA = map(lambda s: encode(s), trainA[1:])
+    trainB = map(lambda s: encode(s), trainB[1:])
+    devA = map(lambda s: encode(s), devA[1:])
+    devB = map(lambda s: encode(s), devB[1:])
+    testA = map(lambda s: encode(s), testA[1:])
+    testB = map(lambda s: encode(s), testB[1:])
+
+    def normalize_ids(ds):
+        for word_ids in ds:
+            for i in xrange(len(word_ids)):
+                word_ids[i] += len(oo_vocab)
+
+    normalize_ids(trainA)
+    normalize_ids(trainB)
+    normalize_ids(devA)
+    normalize_ids(devB)
+    normalize_ids(testA)
+    normalize_ids(testB)
+
+    for k in oo_vocab:
+        oo_vocab[k] = len(oo_vocab) - oo_vocab[k] - 1
+
+    return trainA, trainB, devA, devB, testA, testB, [trainS[1:], devS[1:], testS[1:]], vocab, oo_vocab
 
 
 def encode_labels(labels):
@@ -302,7 +309,6 @@ def batchify(batchA, batchB, idsA, idsB, lengthsA, lengthsB, max_length=None, ma
             idsB[j][i] = batchB[i][j]
 
     return idsA, idsB, lengthsA, lengthsB
-
 
 # Create Model
 def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings, fixed_embeddings, keep_prob,
