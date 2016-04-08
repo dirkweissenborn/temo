@@ -21,20 +21,22 @@ class MORUCell(RNNCell):
         self._num_units = num_units
         self._input_size = num_units if input_size is None else input_size
         self._op_controller_size = 0 if op_controller_size is None else op_controller_size
-        self._op_biases = op_biases
-        self._ops = ops if ops is not None else map(lambda _: 0.0, ops)
+        self._op_biases = list(op_biases)
+        self._ops = ops if ops is not None else list(map(lambda _: 0.0, ops))
+        self._num_ops = len(ops)
 
     @staticmethod
     def from_op_names(operations, biases, num_units, input_size=None, op_controller_size=None):
         if biases is None:
             biases = map(lambda _: 0.0, operations)
-        assert len(biases) == len(operations), "Operations and operation biases have to have same length."
-        ops = map(lambda op: _operations[op], operations)
+        assert len(list(biases)) == len(operations), "Operations and operation biases have to have same length."
+        ops = list(map(lambda op: _operations[op], operations))
         return MORUCell(num_units, input_size, op_controller_size, ops, biases)
 
     def _op_weights(self, inputs):
-        t = tf.reshape(linear(inputs, self._num_units * (len(self._ops)), True), [-1, self._num_units, len(self._ops)])
-        weights = tf.split(2, len(self._ops), t)
+        t = tf.reshape(linear(inputs, self._num_units * self._num_ops, True), [-1, self._num_units, self._num_ops])
+        print(self._num_ops)
+        weights = tf.split(2, self._num_ops, t)
         #op_sharpening = tf.get_variable("gamma", (), tf.float32, initializer=tf.constant_initializer(1.0), trainable=False)
         for i, w in enumerate(weights):
             if self._op_biases and self._op_biases[i] != 0.0:

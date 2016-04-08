@@ -28,46 +28,29 @@ def encode(sentence, vocab, embeddings, fill_vocab=False):
 
 
 def training(FLAGS):
+    # TODO: make this a parameter, also allow one-hot embeddings    
+    embedding_size = 10
+    
     # Load data
     train = load_data(os.path.join(FLAGS.data, "train"))
     dev = load_data(os.path.join(FLAGS.data, "dev"))
     test = load_data(os.path.join(FLAGS.data, "test"))
 
-    #embedding_size = embeddings.vectors.shape[1]
-
-    # Encode data
-    vocab = dict()
-    train = [(encode(phrase, vocab, embeddings, True), label) for tree in train for phrase, label in
-             tree.all_labeled_phrases()]  # if label != 0 or len(phrase) == len(tree.sentence)]
-    #train = [(encode(tree.sentence, vocab, True), tree.label) for tree in train]
-    dev = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in dev]
-    test = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in test]
-        
+    vocab = dict()  
+    #dummy vocab 
+    for i in range(0, 12):
+        vocab[i] = i
     
     if FLAGS.binary:
         train = filter(lambda x: x[1] != 0, train)
         test = filter(lambda x: x[1] != 0, test)
         dev = filter(lambda x: x[1] != 0, dev)
 
-    print("#Training phrases: %d" % len(train))
-    print("#Test: %d" % len(test))
+    print("#Training sequences: %d" % len(train))
+    print("#Test sequences: %d" % len(test))
 
-    task_embeddings = None
-    if FLAGS.embedding_mode != "combined":
-        task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
-        for w, i in vocab.iteritems():
-            e = embeddings.get(w, embeddings.get(w.lower()))
-            if e is None:
-                print("Not in embeddings: " + w)
-                if FLAGS.embedding_mode == "tuned":
-                    e = np.random.uniform(-0.05, 0.05, embedding_size).astype("float32")
-                else:
-                    e = np.zeros((embedding_size,), np.float32)
-            task_embeddings[i] = e
-    else:
-        task_embeddings = np.random.uniform(-0.05, 0.05, len(vocab) * FLAGS.tunable_dim)
-        task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")
-
+    task_embeddings = np.random.uniform(-0.05, 0.05, len(vocab) * FLAGS.tunable_dim)
+    task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
@@ -106,6 +89,7 @@ def training(FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
+                print(ops)
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
 
@@ -240,21 +224,14 @@ def training(FLAGS):
 
 
 def load_data(path):
-    parents_fn = os.path.join(path, "parents.txt")
-    labels_fn = os.path.join(path, "labels.txt")
-    sents_fn = os.path.join(path, "sents.txt")
-    
-    # TODO
-    
-    trees = []
-    with open(parents_fn, 'r') as parents_f, open(labels_fn, 'r') as labels_f, open(sents_fn, 'r') as sents_f:
-        for parents in parents_f:
-            parents = map(int, parents.strip().split(" "))
-            labels = map(int, labels_f.readline().strip().split(" "))
-            sentence = sents_f.readline().strip().split(" ")
-            trees.append(SentimentTree(labels, parents, sentence))
-
-    return trees
+    data = []
+    f = open(path+".txt", "r")
+    for line in f:        
+        datum = line.split(" ")[:-1]
+        seq = datum[1:]
+        label = datum[0]
+        data.append((seq, label))
+    return data
 
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
@@ -316,6 +293,8 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
             inps = tf.split(0, length, inp)
             for i in xrange(length):
                 inps[i] = tf.squeeze(inps[i], [0])
+                
+            print(cell, inps, init_state)    
             _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
             out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
             return out
