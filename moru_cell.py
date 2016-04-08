@@ -83,7 +83,7 @@ class MORUCell(RNNCell):
                 new_op_ctr = [inputs, s]
             with vs.variable_scope("Op"):
                 op_weights = self._op_weights(new_op_ctr)
-                new_cs = map(lambda (o, w): o(s, f) * w, zip(self._ops, op_weights))
+                new_cs = map(lambda o, w: o(s, f) * w, zip(self._ops, op_weights))
                 new_c = tf.reduce_sum(tf.pack(new_cs), [0])
         if self._op_controller_size > 0:
             return new_c, tf.concat(1, [new_c, new_op_ctr])

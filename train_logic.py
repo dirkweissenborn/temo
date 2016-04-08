@@ -27,13 +27,13 @@ def encode(sentence, vocab, embeddings, fill_vocab=False):
     return words, word_ids
 
 
-def training(embeddings, FLAGS):
+def training(FLAGS):
     # Load data
     train = load_data(os.path.join(FLAGS.data, "train"))
     dev = load_data(os.path.join(FLAGS.data, "dev"))
     test = load_data(os.path.join(FLAGS.data, "test"))
 
-    embedding_size = embeddings.vectors.shape[1]
+    #embedding_size = embeddings.vectors.shape[1]
 
     # Encode data
     vocab = dict()
@@ -42,6 +42,8 @@ def training(embeddings, FLAGS):
     #train = [(encode(tree.sentence, vocab, True), tree.label) for tree in train]
     dev = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in dev]
     test = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in test]
+        
+    
     if FLAGS.binary:
         train = filter(lambda x: x[1] != 0, train)
         test = filter(lambda x: x[1] != 0, test)
@@ -185,7 +187,7 @@ def training(embeddings, FLAGS):
                 if offset+batch_size > len(shuffled):
                     offset = 0
                     epochs += 1
-                    print "%d epochs done!" % epochs
+                    print("%d epochs done!" % epochs)
                     shuffled = shuffle(shuffled, random_state=rng2.randint(0, 1000))
 
                 if FLAGS.checkpoint < 0 and offset == 0 or i == FLAGS.checkpoint:
@@ -214,9 +216,9 @@ def training(embeddings, FLAGS):
             acc = evaluate(test)
             accuracies.append(acc)
 
-            print '######## Run %d #########' % run_id
-            print 'Test Accuracy: %.4f' % acc
-            print '########################'
+            print('######## Run %d #########' % run_id)
+            print('Test Accuracy: %.4f' % acc)
+            print('########################')
 
     mean_accuracy = sum(accuracies) / len(accuracies)
 
@@ -232,15 +234,18 @@ def training(embeddings, FLAGS):
             f.write("Configuration: \n")
             f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
 
-    print '######## Overall #########'
-    print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy, s_dev(mean_accuracy, accuracies))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Accuracy: %.4f (%.4f)' % (mean_accuracy, s_dev(mean_accuracy, accuracies)))
+    print('########################')
 
 
 def load_data(path):
     parents_fn = os.path.join(path, "parents.txt")
     labels_fn = os.path.join(path, "labels.txt")
     sents_fn = os.path.join(path, "sents.txt")
+    
+    # TODO
+    
     trees = []
     with open(parents_fn, 'r') as parents_f, open(labels_fn, 'r') as labels_f, open(sents_fn, 'r') as sents_f:
         for parents in parents_f:
@@ -250,27 +255,6 @@ def load_data(path):
             trees.append(SentimentTree(labels, parents, sentence))
 
     return trees
-
-
-class SentimentTree():
-    def __init__(self, labels, parents, sentence):
-        # Node is a tuple (begin, end, label)
-        nodes = [(i, i + 1, labels[i], parents[i] - 1) for i in xrange(len(sentence))]
-        for i in xrange(len(sentence), len(labels)):
-            start = min(nodes, key=lambda n: 10000 if n[3] != i else n[0])[0]
-            end = max(nodes, key=lambda n: -1 if n[3] != i else n[1])[1]
-            nodes.append((start, end, labels[i], parents[i] - 1))
-
-        self.nodes = nodes
-        self.sentence = sentence
-        self.label = labels[-1]
-
-    def all_labeled_phrases(self):
-        return map(lambda n: (self.sentence[n[0]:n[1]], n[2]), self.nodes)
-
-    def labeled_sentence(self):
-        return (self.sentence, self.nodes[-1][2])
-
 
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
@@ -360,7 +344,7 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
 
 if __name__ == "__main__":
     # data loading specifics
-    tf.app.flags.DEFINE_string('data', 'data/sst', 'data dir of SST.')
+    tf.app.flags.DEFINE_string('data', 'data/logic', 'data dir of propositional logic unit test.')
     tf.app.flags.DEFINE_string('embedding_file', 'sentiment_embeddings.pkl', 'path to prepared embeddings (see prepare_sentiment.py)')
     tf.app.flags.DEFINE_string('embedding_format', 'prepared', 'glove|word2vec_bin|word2vec|dict|prepared')
 
@@ -393,15 +377,15 @@ if __name__ == "__main__":
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None
-    if FLAGS.embedding_format == "glove":
-        kwargs = {"vocab_size": 2196017, "dim": 300}
+    #if FLAGS.embedding_format == "glove":
+    #    kwargs = {"vocab_size": 2196017, "dim": 300}
 
-    print "Loading embeddings..."
-    e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
-    print "Done."
+    #print "Loading embeddings..."
+    #e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
+    #print "Done."
 
     import json
     print("Configuration: ")
     print(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
-    training(e, FLAGS)
+    training(FLAGS)
 
