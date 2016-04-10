@@ -47,7 +47,7 @@ class MORUCell(RNNCell):
         acc = weights[0]
         for w in weights[1:]:
             acc += w
-        weights = map(lambda i: tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i), xrange(len(weights)))
+        weights = [tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i) for i in xrange(len(weights))]
         return weights
 
     @property
@@ -85,7 +85,7 @@ class MORUCell(RNNCell):
                 new_op_ctr = [inputs, s]
             with vs.variable_scope("Op"):
                 op_weights = self._op_weights(new_op_ctr)
-                new_cs = map(lambda o, w: o(s, f) * w, zip(self._ops, op_weights))
+                new_cs = [o(s, f) * w for (o, w) in zip(self._ops, op_weights)]
                 new_c = tf.reduce_sum(tf.pack(new_cs), [0])
         if self._op_controller_size > 0:
             return new_c, tf.concat(1, [new_c, new_op_ctr])
