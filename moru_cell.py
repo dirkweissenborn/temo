@@ -35,7 +35,6 @@ class MORUCell(RNNCell):
 
     def _op_weights(self, inputs):
         t = tf.reshape(linear(inputs, self._num_units * self._num_ops, True), [-1, self._num_units, self._num_ops])
-        print(self._num_ops)
         weights = tf.split(2, self._num_ops, t)
         #op_sharpening = tf.get_variable("gamma", (), tf.float32, initializer=tf.constant_initializer(1.0), trainable=False)
         for i, w in enumerate(weights):

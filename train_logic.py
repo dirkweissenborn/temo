@@ -8,25 +8,6 @@ import numpy as np
 import re
 
 
-
-def encode(sentence, vocab, embeddings, fill_vocab=False):
-    embedding_size = embeddings.vectors.shape[1]
-    words = []
-    word_ids = []
-    if "<unk>" not in vocab:
-        vocab["<unk>"] = len(vocab)
-    if "<padding>" not in vocab:
-        vocab["<padding>"] = len(vocab)
-    for w in sentence:
-        # w = w.lower()
-        if fill_vocab and w not in vocab:
-            vocab[w] = len(vocab)
-        wv = embeddings.get(w, embeddings.get(w.lower(), np.zeros(embedding_size)))
-        words.append(wv)
-        word_ids.append(vocab.get(w, vocab.get(w.lower(), vocab["<unk>"])))
-    return words, word_ids
-
-
 def training(FLAGS):
     # TODO: make this a parameter, also allow one-hot embeddings    
     embedding_size = 10
@@ -36,10 +17,11 @@ def training(FLAGS):
     dev = load_data(os.path.join(FLAGS.data, "dev"))
     test = load_data(os.path.join(FLAGS.data, "test"))
 
-    vocab = dict()  
-    #dummy vocab 
+    vocab = dict()
     for i in range(0, 12):
-        vocab[i] = i
+        vocab[i] = len(vocab)
+    for sym in ["<unk>", "<padding>"]:
+        vocab[sym] = len(vocab)     
     
     if FLAGS.binary:
         train = filter(lambda x: x[1] != 0, train)
@@ -49,8 +31,13 @@ def training(FLAGS):
     print("#Training sequences: %d" % len(train))
     print("#Test sequences: %d" % len(test))
 
+    #FIXME: this is with fixed embeddings?
     task_embeddings = np.random.uniform(-0.05, 0.05, len(vocab) * FLAGS.tunable_dim)
-    task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")
+    task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")    
+    
+    train = [([task_embeddings[i] for i in seq], y) for (seq, y) in train]
+    dev = [([task_embeddings[i] for i in seq], y) for (seq, y) in dev]
+    test = [([task_embeddings[i] for i in seq], y) for (seq, y) in test]    
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
@@ -112,7 +99,7 @@ def training(FLAGS):
                                                  max_batch_size=batch_size)
                     size = min(len(ds) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
-                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    current_weights = list(filter(lambda w: any(c in w.name for c in allowed_conds), op_weights))
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
                                    feed_dict={model["inp"]: inp[:,:size],
@@ -127,7 +114,7 @@ def training(FLAGS):
 
                 accuracy = accuracy / len(ds)
 
-                for k,v in op_weights_monitor.iteritems():
+                for k,v in op_weights_monitor.items():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
                     hist = (hist * 1000) / np.sum(hist)
                     print(k, hist.tolist())
@@ -228,14 +215,15 @@ def load_data(path):
     f = open(path+".txt", "r")
     for line in f:        
         datum = line.split(" ")[:-1]
-        seq = datum[1:]
-        label = datum[0]
+        seq = [int(x) for x in datum[1:]]
+        label = int(datum[0])
         data.append((seq, label))
     return data
 
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
-    for j, ((_, _), y) in enumerate(batch):
+    #for j, ((_, _), y) in enumerate(batch):
+    for j, (_, y) in enumerate(batch):        
         if binary:
             Y[j] = min(y + 2, 3) / 2
         else:
@@ -245,7 +233,8 @@ def encode_labels(batch, binary):
 
 # create batch given example sentences
 def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=None):
-    embedding_size = batch[0][0][0][0].shape[0]
+    #embedding_size = batch[0][0][0][0].shape[0]
+    embedding_size = batch[0][0][0].shape[0]
 
     inp = np.zeros([max_length, max_batch_size, embedding_size]) if inp is None else inp
     ids = np.ones([max_length, max_batch_size], np.int32) if ids is None else ids
