@@ -24,16 +24,20 @@ def training(FLAGS):
         dev = load_data(os.path.join(FLAGS.data, "dev"))
         test = load_data(os.path.join(FLAGS.data, "test"))
 
+    #for datum in train:
+    #    print(datum)
+    #os._exit(0)
+
     vocab = dict()
     for i in range(0, 12):
         vocab[i] = len(vocab)
     for sym in ["<unk>", "<padding>"]:
         vocab[sym] = len(vocab)     
     
-    if FLAGS.binary:
-        train = filter(lambda x: x[1] != 0, train)
-        test = filter(lambda x: x[1] != 0, test)
-        dev = filter(lambda x: x[1] != 0, dev)
+    #if FLAGS.binary:
+    #    train = filter(lambda x: x[1] != 0, train)
+    #    test = filter(lambda x: x[1] != 0, test)
+    #    dev = filter(lambda x: x[1] != 0, dev)
 
     print("#Training sequences: %d" % len(train))
     print("#Test sequences: %d" % len(test))
@@ -43,7 +47,6 @@ def training(FLAGS):
     train = [([embeddings[i] for i in seq], y) for (seq, y) in train]
     dev = [([embeddings[i] for i in seq], y) for (seq, y) in dev]
     test = [([embeddings[i] for i in seq], y) for (seq, y) in test]
-
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
@@ -220,7 +223,7 @@ def load_data(path):
     data = []
     f = open(path+".txt", "r")
     for line in f:        
-        datum = line.split(" ")[:-1]
+        datum = line[:-1].split(" ")
         seq = [int(x) for x in datum[1:]]
         label = int(datum[0])
         data.append((seq, label))
@@ -334,13 +337,13 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
-    tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
+    tf.app.flags.DEFINE_integer("batch_size", 1, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
     tf.app.flags.DEFINE_integer("checkpoint", 1000, "checkpoint at.")
-    tf.app.flags.DEFINE_boolean('binary', False, 'binary evaluation')
+    tf.app.flags.DEFINE_boolean('binary', True, 'binary evaluation')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
