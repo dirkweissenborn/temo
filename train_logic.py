@@ -23,7 +23,7 @@ def training(FLAGS):
         dev = load_data(os.path.join(FLAGS.data, "dev"))
         test = load_data(os.path.join(FLAGS.data, "test"))
 
-    #for datum in train:
+    #for datum in train[0:10]:
     #    print(datum)
     #os._exit(0)
 
@@ -345,7 +345,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
-    tf.app.flags.DEFINE_integer("checkpoint", 1000, "checkpoint at.")
+    tf.app.flags.DEFINE_integer("checkpoint", 10, "checkpoint at.")
     tf.app.flags.DEFINE_boolean('binary', True, 'binary evaluation')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
