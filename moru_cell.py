@@ -21,20 +21,21 @@ class MORUCell(RNNCell):
         self._num_units = num_units
         self._input_size = num_units if input_size is None else input_size
         self._op_controller_size = 0 if op_controller_size is None else op_controller_size
-        self._op_biases = op_biases
-        self._ops = ops if ops is not None else map(lambda _: 0.0, ops)
+        self._op_biases = list(op_biases)
+        self._ops = ops if ops is not None else list(map(lambda _: 0.0, ops))
+        self._num_ops = len(ops)
 
     @staticmethod
     def from_op_names(operations, biases, num_units, input_size=None, op_controller_size=None):
         if biases is None:
             biases = map(lambda _: 0.0, operations)
-        assert len(biases) == len(operations), "Operations and operation biases have to have same length."
-        ops = map(lambda op: _operations[op], operations)
+        assert len(list(biases)) == len(operations), "Operations and operation biases have to have same length."
+        ops = list(map(lambda op: _operations[op], operations))
         return MORUCell(num_units, input_size, op_controller_size, ops, biases)
 
     def _op_weights(self, inputs):
-        t = tf.reshape(linear(inputs, self._num_units * (len(self._ops)), True), [-1, self._num_units, len(self._ops)])
-        weights = tf.split(2, len(self._ops), t)
+        t = tf.reshape(linear(inputs, self._num_units * self._num_ops, True), [-1, self._num_units, self._num_ops])
+        weights = tf.split(2, self._num_ops, t)
         #op_sharpening = tf.get_variable("gamma", (), tf.float32, initializer=tf.constant_initializer(1.0), trainable=False)
         for i, w in enumerate(weights):
             if self._op_biases and self._op_biases[i] != 0.0:
@@ -45,7 +46,7 @@ class MORUCell(RNNCell):
         acc = weights[0]
         for w in weights[1:]:
             acc += w
-        weights = map(lambda i: tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i), xrange(len(weights)))
+        weights = [tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i) for i in xrange(len(weights))]
         return weights
 
     @property
@@ -83,7 +84,7 @@ class MORUCell(RNNCell):
                 new_op_ctr = [inputs, s]
             with vs.variable_scope("Op"):
                 op_weights = self._op_weights(new_op_ctr)
-                new_cs = map(lambda o, w: o(s, f) * w, zip(self._ops, op_weights))
+                new_cs = [o(s, f) * w for (o, w) in zip(self._ops, op_weights)]
                 new_c = tf.reduce_sum(tf.pack(new_cs), [0])
         if self._op_controller_size > 0:
             return new_c, tf.concat(1, [new_c, new_op_ctr])

@@ -8,70 +8,46 @@ import numpy as np
 import re
 
 
-
-def encode(sentence, vocab, embeddings, fill_vocab=False):
-    embedding_size = embeddings.vectors.shape[1]
-    words = []
-    word_ids = []
-    if "<unk>" not in vocab:
-        vocab["<unk>"] = len(vocab)
-    if "<padding>" not in vocab:
-        vocab["<padding>"] = len(vocab)
-    for w in sentence:
-        # w = w.lower()
-        if fill_vocab and w not in vocab:
-            vocab[w] = len(vocab)
-        wv = embeddings.get(w, embeddings.get(w.lower(), np.zeros(embedding_size)))
-        words.append(wv)
-        word_ids.append(vocab.get(w, vocab.get(w.lower(), vocab["<unk>"])))
-    return words, word_ids
-
-
 def training(FLAGS):
+    # TODO: make this a parameter, also allow one-hot embeddings    
+    embedding_size = 10
+    
     # Load data
-    train = load_data(os.path.join(FLAGS.data, "train"))
-    dev = load_data(os.path.join(FLAGS.data, "dev"))
-    test = load_data(os.path.join(FLAGS.data, "test"))
+    if FLAGS.debug:
+        train = load_data(os.path.join(FLAGS.data, "debug"))
+        dev = load_data(os.path.join(FLAGS.data, "debug"))
+        test = load_data(os.path.join(FLAGS.data, "debug"))
+        FLAGS.checkpoint = 10
+        FLAGS.batch_size = len(train)
+    else:
+        train = load_data(os.path.join(FLAGS.data, "train"))
+        dev = load_data(os.path.join(FLAGS.data, "dev"))
+        test = load_data(os.path.join(FLAGS.data, "test"))
 
-    #embedding_size = embeddings.vectors.shape[1]
-
-    # Encode data
     vocab = dict()
-    train = [(encode(phrase, vocab, embeddings, True), label) for tree in train for phrase, label in
-             tree.all_labeled_phrases()]  # if label != 0 or len(phrase) == len(tree.sentence)]
-    #train = [(encode(tree.sentence, vocab, True), tree.label) for tree in train]
-    dev = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in dev]
-    test = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in test]
-        
+    for i in range(0, 12):
+        vocab[i] = len(vocab)
+    for sym in ["<unk>", "<padding>"]:
+        vocab[sym] = len(vocab)     
     
     if FLAGS.binary:
         train = filter(lambda x: x[1] != 0, train)
         test = filter(lambda x: x[1] != 0, test)
         dev = filter(lambda x: x[1] != 0, dev)
 
-    print("#Training phrases: %d" % len(train))
-    print("#Test: %d" % len(test))
+    print("#Training sequences: %d" % len(train))
+    print("#Test sequences: %d" % len(test))
 
-    task_embeddings = None
-    if FLAGS.embedding_mode != "combined":
-        task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
-        for w, i in vocab.iteritems():
-            e = embeddings.get(w, embeddings.get(w.lower()))
-            if e is None:
-                print("Not in embeddings: " + w)
-                if FLAGS.embedding_mode == "tuned":
-                    e = np.random.uniform(-0.05, 0.05, embedding_size).astype("float32")
-                else:
-                    e = np.zeros((embedding_size,), np.float32)
-            task_embeddings[i] = e
-    else:
-        task_embeddings = np.random.uniform(-0.05, 0.05, len(vocab) * FLAGS.tunable_dim)
-        task_embeddings = task_embeddings.reshape((len(vocab), FLAGS.tunable_dim)).astype("float32")
+    #TODO: have a flag to switch on trainable embeddings
+    embeddings = np.eye(len(vocab))
+    train = [([embeddings[i] for i in seq], y) for (seq, y) in train]
+    dev = [([embeddings[i] for i in seq], y) for (seq, y) in dev]
+    test = [([embeddings[i] for i in seq], y) for (seq, y) in test]
 
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
-            l = len(s[0][0])
+            l = len(s[0])
             max_l = max(l, max_l)
         return max_l
 
@@ -95,8 +71,8 @@ def training(FLAGS):
 
             cell = None
             input_size = embedding_size
-            if FLAGS.embedding_mode == "combined":
-                input_size = embedding_size + task_embeddings.shape[1]
+            #if FLAGS.embedding_mode == "combined":
+            #    input_size = embedding_size + task_embeddings.shape[1]
             if FLAGS.cell == 'LSTM':
                 cell = BasicLSTMCell(mem_size, input_size=input_size)
             elif FLAGS.cell == 'GRU':
@@ -106,11 +82,12 @@ def training(FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
+                print(ops)
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
 
             nclasses = 2 if FLAGS.binary else 5
-            model = create_model(max_l, l2_lambda, learning_rate, cell, task_embeddings, FLAGS.embedding_mode,
+            model = create_model(max_l, l2_lambda, learning_rate, cell, embeddings, FLAGS.embedding_mode,
                                  FLAGS.keep_prob, nclasses)
             tf.get_variable_scope().reuse_variables()
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
@@ -128,7 +105,7 @@ def training(FLAGS):
                                                  max_batch_size=batch_size)
                     size = min(len(ds) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
-                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    current_weights = list(filter(lambda w: any(c in w.name for c in allowed_conds), op_weights))
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
                                    feed_dict={model["inp"]: inp[:,:size],
@@ -143,7 +120,7 @@ def training(FLAGS):
 
                 accuracy = accuracy / len(ds)
 
-                for k,v in op_weights_monitor.iteritems():
+                for k,v in op_weights_monitor.items():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
                     hist = (hist * 1000) / np.sum(hist)
                     print(k, hist.tolist())
@@ -240,25 +217,19 @@ def training(FLAGS):
 
 
 def load_data(path):
-    parents_fn = os.path.join(path, "parents.txt")
-    labels_fn = os.path.join(path, "labels.txt")
-    sents_fn = os.path.join(path, "sents.txt")
-    
-    # TODO
-    
-    trees = []
-    with open(parents_fn, 'r') as parents_f, open(labels_fn, 'r') as labels_f, open(sents_fn, 'r') as sents_f:
-        for parents in parents_f:
-            parents = map(int, parents.strip().split(" "))
-            labels = map(int, labels_f.readline().strip().split(" "))
-            sentence = sents_f.readline().strip().split(" ")
-            trees.append(SentimentTree(labels, parents, sentence))
-
-    return trees
+    data = []
+    f = open(path+".txt", "r")
+    for line in f:        
+        datum = line.split(" ")[:-1]
+        seq = [int(x) for x in datum[1:]]
+        label = int(datum[0])
+        data.append((seq, label))
+    return data
 
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
-    for j, ((_, _), y) in enumerate(batch):
+    #for j, ((_, _), y) in enumerate(batch):
+    for j, (_, y) in enumerate(batch):        
         if binary:
             Y[j] = min(y + 2, 3) / 2
         else:
@@ -268,18 +239,24 @@ def encode_labels(batch, binary):
 
 # create batch given example sentences
 def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=None):
-    embedding_size = batch[0][0][0][0].shape[0]
+    #embedding_size = batch[0][0][0][0].shape[0]
+    #print(batch[0][0][0])
+    #embedding_size = batch[0][0][0].shape[0]
+    embedding_size = FLAGS.input_size
 
     inp = np.zeros([max_length, max_batch_size, embedding_size]) if inp is None else inp
     ids = np.ones([max_length, max_batch_size], np.int32) if ids is None else ids
     lengths = np.zeros([max_batch_size], np.int32) if lengths is None else lengths
 
     for i in xrange(len(batch)):
-        lengths[i] = len(batch[i][0][0])
-        for j in xrange(len(batch[i][0][0])):
+        #print()
+        #print(batch[i])
+        #print()
+        #print(inp[i])
+        lengths[i] = len(batch[i][0])
+        for j in xrange(len(batch[i][0])):
             inp[j][i] = batch[i][0][0][j]
             ids[j][i] = batch[i][0][1][j]
-
     return inp, ids, lengths
 
 
@@ -316,6 +293,8 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
             inps = tf.split(0, length, inp)
             for i in xrange(length):
                 inps[i] = tf.squeeze(inps[i], [0])
+                
+            print(cell, inps, init_state)    
             _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
             out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
             return out
@@ -345,10 +324,9 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
 if __name__ == "__main__":
     # data loading specifics
     tf.app.flags.DEFINE_string('data', 'data/logic', 'data dir of propositional logic unit test.')
-    tf.app.flags.DEFINE_string('embedding_file', 'sentiment_embeddings.pkl', 'path to prepared embeddings (see prepare_sentiment.py)')
-    tf.app.flags.DEFINE_string('embedding_format', 'prepared', 'glove|word2vec_bin|word2vec|dict|prepared')
 
     # model
+    tf.app.flags.DEFINE_integer("input_size", 10, "input size of model")
     tf.app.flags.DEFINE_integer("mem_size", 100, "hidden size of model")
 
     # training
@@ -358,14 +336,11 @@ if __name__ == "__main__":
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
-    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
+    tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
     tf.app.flags.DEFINE_integer("checkpoint", 1000, "checkpoint at.")
-    tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
     tf.app.flags.DEFINE_boolean('binary', False, 'binary evaluation')
-    tf.app.flags.DEFINE_integer('tunable_dim', 10,
-                                'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
@@ -374,6 +349,10 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                  "and previous state. Given a positive integer, an additional"
                                                  "recurrent op ctr is introduced in MORUCell.")
+
+    tf.app.flags.DEFINE_boolean("debug", True, "Train and test model on a tiny debug corpus.")
+
+    tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None
