@@ -252,14 +252,12 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
     lengths = np.zeros([max_batch_size], np.int32) if lengths is None else lengths
 
     for i in xrange(len(batch)):
-        #print()
-        #print(batch[i])
-        #print()
-        #print(inp[i])
-        lengths[i] = len(batch[i][0])
-        for j in xrange(len(batch[i][0])):
-            inp[j][i] = batch[i][0][0][j]
-            ids[j][i] = batch[i][0][1][j]
+        seq, label = batch[i]
+        lengths[i] = len(seq)
+        for j in xrange(lengths[i]):
+            for k in xrange(embedding_size):
+                inp[j][i][k] = seq[j][k] # todo: vectorize?
+            ids[j][i] = label
     return inp, ids, lengths
 
 
@@ -337,7 +335,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
-    tf.app.flags.DEFINE_integer("batch_size", 1, "Number of examples per batch.")
+    tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
@@ -353,7 +351,7 @@ if __name__ == "__main__":
                                                  "and previous state. Given a positive integer, an additional"
                                                  "recurrent op ctr is introduced in MORUCell.")
 
-    tf.app.flags.DEFINE_boolean("debug", True, "Train and test model on a tiny debug corpus.")
+    tf.app.flags.DEFINE_boolean("debug", False, "Train and test model on a tiny debug corpus.")
 
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
 
