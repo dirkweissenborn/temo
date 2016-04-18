@@ -9,8 +9,7 @@ import re
 
 
 def training(FLAGS):
-    # TODO: make this a parameter, also allow one-hot embeddings    
-    embedding_size = 10
+    embedding_size = FLAGS.input_size # todo: can be different from input_size, no?
     
     # Load data
     if FLAGS.debug:
@@ -42,11 +41,20 @@ def training(FLAGS):
     print("#Training sequences: %d" % len(train))
     print("#Test sequences: %d" % len(test))
 
-    #TODO: have a flag to switch on trainable embeddings
-    embeddings = np.eye(len(vocab))
-    train = [([embeddings[i] for i in seq], y) for (seq, y) in train]
-    dev = [([embeddings[i] for i in seq], y) for (seq, y) in dev]
-    test = [([embeddings[i] for i in seq], y) for (seq, y) in test]
+    # todo: have a flag to switch on trainable embeddings
+    embeddings = None
+    if FLAGS.one_hot:
+        embeddings = np.eye(len(vocab))
+        #FLAGS.embedding_size = len(vocab)
+        FLAGS.input_size = len(vocab)
+        embedding_size = len(vocab)
+    else:
+        embeddings = tf.Variable(tf.random_normal([embedding_size, len(vocab)]), trainable=True)
+
+    # fixme: adapt for non one-hot case
+    train = [([embeddings[i] for i in seq], seq, y) for (seq, y) in train]
+    dev = [([embeddings[i] for i in seq], seq, y) for (seq, y) in dev]
+    test = [([embeddings[i] for i in seq], seq, y) for (seq, y) in test]
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
@@ -232,7 +240,7 @@ def load_data(path):
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
     #for j, ((_, _), y) in enumerate(batch):
-    for j, (_, y) in enumerate(batch):        
+    for j, (_, _, y) in enumerate(batch):
         if binary:
             Y[j] = min(y + 2, 3) / 2
         else:
@@ -242,9 +250,6 @@ def encode_labels(batch, binary):
 
 # create batch given example sentences
 def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=None):
-    #embedding_size = batch[0][0][0][0].shape[0]
-    #print(batch[0][0][0])
-    #embedding_size = batch[0][0][0].shape[0]
     embedding_size = FLAGS.input_size
 
     inp = np.zeros([max_length, max_batch_size, embedding_size]) if inp is None else inp
@@ -252,12 +257,12 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
     lengths = np.zeros([max_batch_size], np.int32) if lengths is None else lengths
 
     for i in xrange(len(batch)):
-        seq, label = batch[i]
+        seq, seq_ids, label = batch[i]
         lengths[i] = len(seq)
         for j in xrange(lengths[i]):
             for k in xrange(embedding_size):
-                inp[j][i][k] = seq[j][k] # todo: vectorize?
-            ids[j][i] = label
+                inp[j][i] = seq[j]
+            ids[j][i] = seq_ids[j]
     return inp, ids, lengths
 
 
@@ -335,7 +340,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
-    tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
+    tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
@@ -354,6 +359,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_boolean("debug", False, "Train and test model on a tiny debug corpus.")
 
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
+    tf.app.flags.DEFINE_boolean("one_hot", True, "Whether to use one hot encodings of symbols.")
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None
