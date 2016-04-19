@@ -67,8 +67,8 @@ def training(embeddings, FLAGS):
                 ops = FLAGS.moru_ops.split(",")
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=8, input_size=input_size, rng=random.Random(123))
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=8, input_size=input_size, rng=random.Random(123))
+                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, rng=random.Random(123))
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, rng=random.Random(123))
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -82,11 +82,11 @@ def training(embeddings, FLAGS):
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
 
-            def evaluate(dsA, dsB, _scores):
+            def evaluate(dsA, dsB, labels):
                 idsA, idsB, lengthsA, lengthsB = None, None, None, None
                 e_off = 0
                 accuracy = 0.0
-                y = encode_labels(_scores)
+                y = encode_labels(labels)
                 op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
 
                 while e_off < len(dsA):
@@ -132,7 +132,7 @@ def training(embeddings, FLAGS):
             i = 0
             accuracy = float("-inf")
             step_time = 0.0
-            while True:
+            while not FLAGS.eval:
                 start_time = time.time()
                 idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
                                                           shuffledB[offset:offset+batch_size],
@@ -174,14 +174,14 @@ def training(embeddings, FLAGS):
                     loss = 0.0
                     if acc > accuracy + 1e-5:
                         accuracy = acc
-                        saver.save(sess, '/tmp/my-model')
+                        saver.save(sess, FLAGS.model_path)
                     else:
                         lr = tf.get_variable("model/lr")
                         sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
                         if epochs >= FLAGS.min_epochs:
                             break
 
-            saver.restore(sess, '/tmp/my-model')
+            saver.restore(sess, FLAGS.model_path)
             sess.run(model["keep_prob"].assign(1.0))
             acc = evaluate(testA, testB, y_scores[2])
             accuracies.append(acc)
@@ -367,7 +367,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         if isinstance(cellA, AssociativeGRUCell):
             print("Use AssociativeGRU")
-            prepro_cell = BasicRNNCell(cellA.output_size/2)
+            prepro_cell = RectifierRNNCell(cellA.output_size/2)
             if keep_prob < 1.0:
                 prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
             with tf.variable_scope("assoc_m", initializer=initializer):
@@ -451,6 +451,7 @@ if __name__ == "__main__":
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_integer('checkpoint', 1000, 'number of batches until checkpoint.')
+    tf.app.flags.DEFINE_integer('num_copies', 1, 'number of copies for associative RNN.')
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
@@ -458,6 +459,9 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                      "and previous state. Given a positive integer, an additional"
                                                      "recurrent op ctr is introduced in MORUCell.")
+    tf.app.flags.DEFINE_boolean('eval', False, 'only evaluation')
+    tf.app.flags.DEFINE_string('model_path', '/tmp/snli-model', 'only evaluation')
+
 
     FLAGS = tf.app.flags.FLAGS
 
