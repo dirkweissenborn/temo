@@ -121,7 +121,7 @@ def training(embeddings, FLAGS):
             sess.run(tf.initialize_all_variables())
             num_params = reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
             print("Num params: %d" % num_params)
-            print("Num params (without OOV): %d" % (num_params - len(oo_vocab) * embedding_size))
+            print("Num params (without OOV): %d" % (num_params - (len(oo_vocab) + len(vocab)) * embedding_size))
 
             shuffledA, shuffledB, y = \
                 shuffle(list(trainA), list(trainB), list(y_scores[0]), random_state=rng2.randint(0, 1000))
@@ -140,7 +140,9 @@ def training(embeddings, FLAGS):
                                                           max_length=max_l,
                                                           max_batch_size=batch_size)
                 train_labels = encode_labels(y[offset:offset+batch_size])
-                l, _ = sess.run([model["loss"], model["update"]],
+                # update initialized embeddings only after first epoch
+                update = model["update"] if epochs>= 1 else model["update_ex"]
+                l, _ = sess.run([model["loss"], update],
                                 feed_dict={model["idsA"]:idsA,
                                            model["idsB"]:idsB,
                                            model["lengthsA"]: lengthsA,
@@ -335,7 +337,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             if ids is not None:
                 E = None
                 if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
-                    E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
+                    E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
                 if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
                     E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
                     if E is not None:
@@ -365,16 +367,18 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         if isinstance(cellA, AssociativeGRUCell):
             print("Use AssociativeGRU")
+            prepro_cell = BasicRNNCell(cellA.output_size/2)
             if keep_prob < 1.0:
-                cellA = DropoutWrapper(cellA, keep_prob_var)
-                cellB = DropoutWrapper(cellB, keep_prob_var)
+                prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
             with tf.variable_scope("assoc_m", initializer=initializer):
-                _, c, outsA = my_rnn(idsA, cellA, lengthsA)
+                _, _, outsA = my_rnn(idsA, prepro_cell, lengthsA)
+                _, c, outsA = my_rnn(None, cellA, lengthsA, additional_inputs=tf.pack(outsA))
                 tf.get_variable_scope().reuse_variables()
+                _, _, outsB = my_rnn(idsB, prepro_cell, lengthsB)
                 rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size/2], tf.float32)
                 rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size/2])
                 c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size/2], [-1, -1])])
-                _, _, outsB = my_rnn(idsB, cellB, lengthsB, init_state=c)
+                _, _, outsB = my_rnn(None, cellB, lengthsB, init_state=c, additional_inputs=tf.pack(outsB))
 
 #            with tf.variable_scope("premise", initializer=initializer):
  #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
@@ -411,10 +415,16 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             l2_loss = l2_lambda * tf.reduce_sum(array_ops.pack([tf.nn.l2_loss(t) for t in train_params]))
             loss = loss+l2_loss
 
-    update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params)
+    grads = tf.gradients(loss, train_params)
+
+    grads_params = zip(grads, train_params)
+    grads_params_ex_emb = [(g,p) for (g,p) in grads_params if not p.name.endswith("E_fix")]
+
+    update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params)
+    update_exclude_embeddings = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params_ex_emb)
     return {"idsA":idsA, "idsB":idsB, "lengthsA":lengthsA, "lengthsB":lengthsB, "y":y,
             "probs":probs, "scores":scores,"keep_prob": keep_prob_var,
-            "loss":loss, "update":update}
+            "loss":loss, "update":update, "update_ex":update_exclude_embeddings}
 
 
 if __name__ == "__main__":

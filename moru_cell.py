@@ -101,7 +101,7 @@ class AssociativeGRUCell(RNNCell):
         self._input_size = num_units if input_size is None else input_size
         self._num_copies = num_copies
         self._read_only = read_only
-        self._permutations = [list(xrange(0, num_units/2)) for _ in xrange(self._num_copies)]
+        self._permutations = [list(xrange(0, num_units/2)) for _ in xrange(self._num_copies-1)]
         for perm in self._permutations:
             rng.shuffle(perm)
 
@@ -119,9 +119,10 @@ class AssociativeGRUCell(RNNCell):
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
-            with vs.variable_scope("Permutations"):
-                perms = reduce(lambda x, y: x+y, self._permutations)
-                perms = tf.constant(perms)
+            if self._num_copies > 1:
+                with vs.variable_scope("Permutations"):
+                    perms = reduce(lambda x, y: x+y, self._permutations)
+                    perms = tf.constant(perms)
 
             last_key = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, self._num_units], [-1,-1])
@@ -129,7 +130,9 @@ class AssociativeGRUCell(RNNCell):
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, last_key], self._num_units, False)))
                 k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
-                k_real, k_imag = tf.split(0, 2, tf.transpose(tf.nn.embedding_lookup(k, perms)))
+                if self._num_copies > 1:
+                    k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
+                k_real, k_imag = tf.split(0, 2, tf.transpose(k))
                 ks = tf.complex(k_real, k_imag)
 
             with vs.variable_scope("Read"):
@@ -180,9 +183,10 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
-            with vs.variable_scope("Permutations"):
-                perms = reduce(lambda x, y: x+y, self._permutations)
-                perms = tf.constant(perms)
+            if self._num_copies > 1:
+                with vs.variable_scope("Permutations"):
+                    perms = reduce(lambda x, y: x+y, self._permutations)
+                    perms = tf.constant(perms)
 
             old_key = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, self._num_units], [-1, self._num_units * self._num_copies])
@@ -191,7 +195,9 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, old_key], self._num_units, False)))
                 k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
-                k_real, k_imag = tf.split(0, 2, tf.transpose(tf.nn.embedding_lookup(k, perms)))
+                if self._num_copies > 1:
+                    k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
+                k_real, k_imag = tf.split(0, 2, tf.transpose(k))
                 ks = tf.complex(k_real, k_imag)
                 c_ks = tf.conj(ks)
 
@@ -260,3 +266,9 @@ def bound(v, name=None):
     v_modulus = tf.maximum(1.0, tf.sqrt(im_v * im_v + re_v * re_v))
     return tf.complex(re_v / v_modulus, im_v / v_modulus, name)
 
+
+class RectifierRNNCell(BasicRNNCell):
+    def __call__(self, inputs, state, scope=None):
+        with vs.variable_scope(scope or type(self).__name__):
+            output = tf.maximum(0, linear([inputs, state], self._num_units, True))
+        return output, output
