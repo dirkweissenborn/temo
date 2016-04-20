@@ -55,9 +55,9 @@ def training(FLAGS):
         embeddings = np.random.randn(len(vocab), embedding_size)
 
     #if FLAGS.one_hot:
-        train = [([embeddings[i] for i in seq], seq, y) for (seq, y) in train]
-        dev = [([embeddings[i] for i in seq], seq, y) for (seq, y) in dev]
-        test = [([embeddings[i] for i in seq], seq, y) for (seq, y) in test]
+    train = [([embeddings[i] for i in seq], seq, y) for (seq, y) in train]
+    dev = [([embeddings[i] for i in seq], seq, y) for (seq, y) in dev]
+    test = [([embeddings[i] for i in seq], seq, y) for (seq, y) in test]
     #else:
     #    train = [([tf.nn.embedding_lookup(embeddings, i) for i in seq], seq, y)
     #             for (seq, y) in train]
@@ -257,10 +257,11 @@ def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
     #for j, ((_, _), y) in enumerate(batch):
     for j, (_, _, y) in enumerate(batch):
-        if binary:
-            Y[j] = min(y + 2, 3) / 2
-        else:
-            Y[j] = y + 2
+        #if binary:
+        #    Y[j] = min(y + 2, 3) / 2
+        #else:
+        #    Y[j] = y + 2
+        Y[j] = y
     return Y
 
 
@@ -351,8 +352,8 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string('data', 'data/logic', 'data dir of propositional logic unit test.')
 
     # model
-    tf.app.flags.DEFINE_integer("input_size", 2, "input size of model")
-    tf.app.flags.DEFINE_integer("mem_size", 2, "hidden size of model")
+    tf.app.flags.DEFINE_integer("input_size", 16, "input size of model")
+    tf.app.flags.DEFINE_integer("mem_size", 16, "hidden size of model")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
@@ -360,7 +361,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
-    tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
+    tf.app.flags.DEFINE_integer("min_epochs", 100, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
@@ -378,7 +379,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_boolean("debug", False, "Train and test model on a tiny debug corpus.")
 
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
-    tf.app.flags.DEFINE_boolean("one_hot", False, "Whether to use one hot encodings of symbols.")
+    tf.app.flags.DEFINE_boolean("one_hot", True, "Whether to use one hot encodings of symbols.")
     tf.app.flags.DEFINE_boolean("trainable_embeddings", False, "Whether non-one-hot embeddings can be trained.")
 
     FLAGS = tf.app.flags.FLAGS
