@@ -39,6 +39,7 @@ def training(FLAGS):
     #    dev = filter(lambda x: x[1] != 0, dev)
 
     print("#Training sequences: %d" % len(train))
+    print("#Dev sequences: %d" % len(test))
     print("#Test sequences: %d" % len(test))
 
     # todo: have a flag to switch on trainable embeddings
@@ -49,12 +50,21 @@ def training(FLAGS):
         FLAGS.input_size = len(vocab)
         embedding_size = len(vocab)
     else:
-        embeddings = tf.Variable(tf.random_normal([embedding_size, len(vocab)]), trainable=True)
+        #embeddings = tf.Variable(tf.random_normal([embedding_size, len(vocab)]),
+        #                         trainable=FLAGS.trainable_embeddings)
+        embeddings = np.random.randn(len(vocab), embedding_size)
 
-    # fixme: adapt for non one-hot case
-    train = [([embeddings[i] for i in seq], seq, y) for (seq, y) in train]
-    dev = [([embeddings[i] for i in seq], seq, y) for (seq, y) in dev]
-    test = [([embeddings[i] for i in seq], seq, y) for (seq, y) in test]
+    #if FLAGS.one_hot:
+        train = [([embeddings[i] for i in seq], seq, y) for (seq, y) in train]
+        dev = [([embeddings[i] for i in seq], seq, y) for (seq, y) in dev]
+        test = [([embeddings[i] for i in seq], seq, y) for (seq, y) in test]
+    #else:
+    #    train = [([tf.nn.embedding_lookup(embeddings, i) for i in seq], seq, y)
+    #             for (seq, y) in train]
+    #    dev = [([tf.nn.embedding_lookup(embeddings, i) for i in seq], seq, y)
+    #             for (seq, y) in dev]
+    #    test = [([tf.nn.embedding_lookup(embeddings, i) for i in seq], seq, y)
+    #             for (seq, y) in test]
 
     def max_length(sentences, max_l = 0):
         for s in sentences:
@@ -259,6 +269,9 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
     for i in xrange(len(batch)):
         seq, seq_ids, label = batch[i]
         lengths[i] = len(seq)
+        #print(seq)
+        #print(seq_ids)
+        #print(label)
         for j in xrange(lengths[i]):
             for k in xrange(embedding_size):
                 inp[j][i] = seq[j]
@@ -332,8 +345,8 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_string('data', 'data/logic', 'data dir of propositional logic unit test.')
 
     # model
-    tf.app.flags.DEFINE_integer("input_size", 10, "input size of model")
-    tf.app.flags.DEFINE_integer("mem_size", 100, "hidden size of model")
+    tf.app.flags.DEFINE_integer("input_size", 2, "input size of model")
+    tf.app.flags.DEFINE_integer("mem_size", 2, "hidden size of model")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
@@ -359,7 +372,8 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_boolean("debug", False, "Train and test model on a tiny debug corpus.")
 
     tf.app.flags.DEFINE_string('embedding_mode', 'fixed', 'fixed|tuned|combined')
-    tf.app.flags.DEFINE_boolean("one_hot", True, "Whether to use one hot encodings of symbols.")
+    tf.app.flags.DEFINE_boolean("one_hot", False, "Whether to use one hot encodings of symbols.")
+    tf.app.flags.DEFINE_boolean("trainable_embeddings", False, "Whether non-one-hot embeddings can be trained.")
 
     FLAGS = tf.app.flags.FLAGS
     kwargs = None
