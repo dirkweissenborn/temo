@@ -111,7 +111,7 @@ class AssociativeGRUCell(RNNCell):
 
     @property
     def output_size(self):
-        return 2*self._num_units
+        return self._num_units
 
     @property
     def state_size(self):
@@ -124,11 +124,11 @@ class AssociativeGRUCell(RNNCell):
                     perms = reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            last_key = tf.slice(state, [0, 0], [-1, self._num_units])
+            old_h = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, self._num_units], [-1,-1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs, last_key], self._num_units, False)))
+                key = bound(complexify(linear([inputs, old_h], self._num_units, True)))
                 k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
                 if self._num_copies > 1:
                     k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
@@ -156,9 +156,9 @@ class AssociativeGRUCell(RNNCell):
                 new_h = h
                 new_ss = old_ss
 
-        key = uncomplexify(key, "key")
+        #key = uncomplexify(key, "key")
 
-        return tf.concat(1, [new_h, key]), tf.concat(1, [key, new_ss])
+        return new_h, tf.concat(1, [new_h, new_ss])
 
     def _read(self, keys, redundant_states):
         read = keys * redundant_states
@@ -179,7 +179,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
 
     @property
     def output_size(self):
-        return 3*self._num_units
+        return 2*self._num_units
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
@@ -188,12 +188,12 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                     perms = reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            old_key = tf.slice(state, [0, 0], [-1, self._num_units])
+            old_h = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, self._num_units], [-1, self._num_units * self._num_copies])
             read_mem = tf.slice(state, [0, self._num_units * (self._num_copies+1)], [-1, -1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs, old_key], self._num_units, False)))
+                key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
                 k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
                 if self._num_copies > 1:
                     k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
@@ -225,9 +225,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             with vs.variable_scope("Read_Given"):
                 h2 = uncomplexify(self._read(c_ks, complexify(read_mem)), "retrieved")
 
-        key = uncomplexify(key, "key")
-
-        return tf.concat(1, [new_h, h2, key]), tf.concat(1, [key, new_ss, read_mem])
+        return tf.concat(1, [new_h, h2]), tf.concat(1, [new_h, new_ss, read_mem])
 
 
 class ControlledAssociativeGRUCell(AssociativeGRUCell):

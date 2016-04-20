@@ -121,7 +121,7 @@ def training(embeddings, FLAGS):
             sess.run(tf.initialize_all_variables())
             num_params = reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
             print("Num params: %d" % num_params)
-            print("Num params (without OOV): %d" % (num_params - (len(oo_vocab) + len(vocab)) * embedding_size))
+            print("Num params (without embeddings): %d" % (num_params - (len(oo_vocab) + len(vocab)) * embedding_size))
 
             shuffledA, shuffledB, y = \
                 shuffle(list(trainA), list(trainB), list(y_scores[0]), random_state=rng2.randint(0, 1000))
@@ -367,7 +367,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         if isinstance(cellA, AssociativeGRUCell):
             print("Use AssociativeGRU")
-            prepro_cell = RectifierRNNCell(cellA.output_size/2)
+            prepro_cell = GRUCell(cellA.output_size)
             if keep_prob < 1.0:
                 prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
             with tf.variable_scope("assoc_m", initializer=initializer):
@@ -375,9 +375,9 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 _, c, outsA = my_rnn(None, cellA, lengthsA, additional_inputs=tf.pack(outsA))
                 tf.get_variable_scope().reuse_variables()
                 _, _, outsB = my_rnn(idsB, prepro_cell, lengthsB)
-                rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size/2], tf.float32)
-                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size/2])
-                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size/2], [-1, -1])])
+                rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size], tf.float32)
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
+                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
                 _, _, outsB = my_rnn(None, cellB, lengthsB, init_state=c, additional_inputs=tf.pack(outsB))
 
 #            with tf.variable_scope("premise", initializer=initializer):
@@ -385,7 +385,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
   #                               lengthsA, additional_inputs=tf.pack(outsA))
 
             with tf.variable_scope("hypothesis", initializer=initializer):
-                h, _, _ = my_rnn(None, GRUCell(cellB.output_size/3, cellB.output_size),
+                h, _, _ = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
                                  lengthsB, additional_inputs=tf.pack(outsB)) #, init_state=s)
         else:
             if keep_prob < 1.0:
