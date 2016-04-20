@@ -244,8 +244,14 @@ def load_data(path):
         datum = line[:-1].split(" ")
         seq = [int(x) for x in datum[1:]]
         label = int(datum[0])
+        # fixme: sanity check
+        #if np.random.random_integers(0, 1) > 0:
+        #    label = 1
+        #else:
+        #    label = 0
         data.append((seq, label))
     return data
+
 
 def encode_labels(batch, binary):
     Y = np.zeros((len(batch))).astype('int64')
