@@ -73,9 +73,10 @@ def training(embeddings, FLAGS):
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
                 tunable_embeddings, fixed_embeddings = task_embeddings[:len(oo_vocab)], task_embeddings[len(oo_vocab):]
-
-            model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
-                                 fixed_embeddings, FLAGS.keep_prob)
+            
+            with tf.device(FLAGS.device):
+                model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
+                                     fixed_embeddings, FLAGS.keep_prob)
 
             tf.get_variable_scope().reuse_variables()
 
@@ -185,9 +186,9 @@ def training(embeddings, FLAGS):
             sess.run(model["keep_prob"].assign(1.0))
             acc = evaluate(testA, testB, y_scores[2])
             accuracies.append(acc)
-            print '######## Run %d #########' % run_id
-            print 'Test Accuracy: %.4f' % acc
-            print '########################'
+            print('######## Run %d #########' % run_id)
+            print('Test Accuracy: %.4f' % acc)
+            print('########################')
 
     mean_accuracy = sum(accuracies) / len(accuracies)
 
@@ -197,9 +198,9 @@ def training(embeddings, FLAGS):
             d += (mean-el) * (mean-el)
         return math.sqrt(d/len(pop))
 
-    print '######## Overall #########'
-    print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies)))
+    print('########################')
 
     if FLAGS.result_file:
         with open(FLAGS.result_file, 'w') as f:
@@ -259,12 +260,12 @@ def load_data(loc, embeddings):
         word_ids.append(-oo_vocab["</s>"]-1)
         return word_ids
 
-    trainA = map(lambda s: encode(s), trainA[1:])
-    trainB = map(lambda s: encode(s), trainB[1:])
-    devA = map(lambda s: encode(s), devA[1:])
-    devB = map(lambda s: encode(s), devB[1:])
-    testA = map(lambda s: encode(s), testA[1:])
-    testB = map(lambda s: encode(s), testB[1:])
+    trainA = [encode(s) for s in trainA[1:]]
+    trainB = [encode(s) for s in trainB[1:]]
+    devA = [encode(s) for s in devA[1:]]
+    devB = [encode(s) for s in devB[1:]]
+    testA = [encode(s) for s in testA[1:]]
+    testB = [encode(s) for s in testB[1:]]
 
     def normalize_ids(ds):
         for word_ids in ds:
@@ -332,19 +333,21 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
         keep_prob_var = tf.get_variable("keep_prob", (), initializer=tf.constant_initializer(keep_prob, tf.float32),
                                         trainable=False)
 
-        def my_rnn(ids, cell, lengths, additional_inputs=None, rev=False, init_state=None):
+        def create_embeddings():
+            E = None
+            if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
+                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
+            if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
+                E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
+                if E is not None:
+                    E = tf.concat(0, [E_tune, E])
+                else:
+                    E = E_tune
+            return E
+
+        def my_rnn(ids, cell, lengths, E=None, additional_inputs=None, rev=False, init_state=None):
             inp = None
             if ids is not None:
-                E = None
-                if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
-                    E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
-                if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
-                    E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
-                    if E is not None:
-                        E = tf.concat(0, [E_tune, E])
-                    else:
-                        E = E_tune
-
                 inp = tf.nn.embedding_lookup(E, ids)
                 if additional_inputs is not None:
                     inp = tf.concat(2, [inp, additional_inputs])
@@ -367,18 +370,24 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         if isinstance(cellA, AssociativeGRUCell):
             print("Use AssociativeGRU")
-            prepro_cell = GRUCell(cellA.output_size)
+            #prepro_cell = GRUCell(cellA.output_size)
             if keep_prob < 1.0:
-                prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
+                #prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
+                cellA = DropoutWrapper(cellA, keep_prob_var)
+                cellB = DropoutWrapper(cellB, keep_prob_var)
             with tf.variable_scope("assoc_m", initializer=initializer):
-                _, _, outsA = my_rnn(idsA, prepro_cell, lengthsA)
-                _, c, outsA = my_rnn(None, cellA, lengthsA, additional_inputs=tf.pack(outsA))
+                #_, _, outsA = my_rnn(idsA, prepro_cell, lengthsA)
+                #_, c, outsA = my_rnn(None, cellA, lengthsA, additional_inputs=tf.pack(outsA))
+                E = create_embeddings()
+                _, c, outsA = my_rnn(idsA, cellA, lengthsA, E)
+            #with tf.variable_scope("assoc_m2", initializer=initializer):
                 tf.get_variable_scope().reuse_variables()
-                _, _, outsB = my_rnn(idsB, prepro_cell, lengthsB)
+                #_, _, outsB = my_rnn(idsB, prepro_cell, lengthsB)
                 rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size], tf.float32)
                 rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
                 c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
-                _, _, outsB = my_rnn(None, cellB, lengthsB, init_state=c, additional_inputs=tf.pack(outsB))
+                #_, _, outsB = my_rnn(None, cellB, lengthsB, init_state=c, additional_inputs=tf.pack(outsB))
+                _, _, outsB = my_rnn(idsB, cellB, lengthsB, E, init_state=c)
 
 #            with tf.variable_scope("premise", initializer=initializer):
  #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
@@ -391,10 +400,13 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             if keep_prob < 1.0:
                 cellA = DropoutWrapper(cellA, keep_prob_var)
                 cellB = DropoutWrapper(cellB, keep_prob_var)
+            E = create_embeddings()
             with tf.variable_scope("premise", initializer=initializer):
-                p, s, _ = my_rnn(idsA, cellA, lengthsA)
+                p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
             with tf.variable_scope("hypothesis", initializer=initializer):
-                h, _, _ = my_rnn(idsB, cellB, lengthsB, init_state=s)
+                h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
+            h = tf.concat(1, [p, h])
+
 
 
 
@@ -461,7 +473,7 @@ if __name__ == "__main__":
                                                      "recurrent op ctr is introduced in MORUCell.")
     tf.app.flags.DEFINE_boolean('eval', False, 'only evaluation')
     tf.app.flags.DEFINE_string('model_path', '/tmp/snli-model', 'only evaluation')
-
+    tf.app.flags.DEFINE_string('device', '/gpu:0', 'device to run on')
 
     FLAGS = tf.app.flags.FLAGS
 
@@ -469,9 +481,9 @@ if __name__ == "__main__":
     if FLAGS.embedding_format == "glove":
         kwargs = {"vocab_size": 2196017, "dim": 300}
 
-    print "Loading embeddings..."
+    print("Loading embeddings...")
     e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
-    print "Done."
+    print("Done.")
 
 
     import json

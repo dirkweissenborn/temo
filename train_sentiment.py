@@ -129,9 +129,9 @@ def training(embeddings, FLAGS):
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
-                                   feed_dict={model["inp"]: inp[:,:size],
-                                              model["ids"]: ids[:,:size],
-                                              model["lengths"]: lengths[:size]})
+                                       feed_dict={model["inp"]: inp[:,:size],
+                                                  model["ids"]: ids[:,:size],
+                                                  model["lengths"]: lengths[:size]})
                     y = encode_labels(ds[e_off:e_off + batch_size], FLAGS.binary)
                     accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y))
                     for probs, w in zip(result[1:], current_weights):
