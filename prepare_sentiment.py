@@ -24,13 +24,13 @@ kwargs = None
 if FLAGS.embedding_format == "glove":
     kwargs = {"vocab_size": 2196017, "dim": 300}
 
-print "Loading embeddings..."
+print("Loading embeddings...")
 embeddings = web.embeddings.load_embedding(FLAGS.embedding_file, format=FLAGS.embedding_format, normalize=False, clean_words=False, load_kwargs=kwargs)
-print "Done."
+print("Done.")
 
 embedding_size = embeddings.vectors.shape[1]
 
-print "Collecting necessary embeddings for sentiment task..."
+print("Collecting necessary embeddings for sentiment task...")
 sst_embeddings = dict()
 
 

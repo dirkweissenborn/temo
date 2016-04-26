@@ -168,7 +168,7 @@ if __name__ == "__main__":
     perplexities = []
 
     rng = random.Random(FLAGS.seed)
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
         last_valid_perplexities = [float("inf")] * 3
         with tf.Session() as sess:
@@ -209,9 +209,9 @@ if __name__ == "__main__":
             saver.restore(sess, '/tmp/my-model')
             test_perplexity = run_epoch(sess, mtest, test_data, tf.no_op())
             perplexities.append(test_perplexity)
-            print '######## Run %d #########' % run_id
+            print("######## Run %d #########" % run_id)
             print("Test Perplexity: %.3f" % test_perplexity)
-            print '########################'
+            print('########################')
             os.remove('/tmp/my-model')
 
     mean_perplexities = sum(perplexities) / len(perplexities)
@@ -230,6 +230,6 @@ if __name__ == "__main__":
             f.write("Configuration: \n")
             f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
 
-    print '######## Overall #########'
-    print 'Test Perplexity: %.4f (%.4f)' % (mean_perplexities, s_dev(mean_perplexities, perplexities))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Perplexity: %.4f (%.4f)' % (mean_perplexities, s_dev(mean_perplexities, perplexities)))
+    print('########################')

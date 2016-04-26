@@ -40,7 +40,7 @@ def training(embeddings, FLAGS):
     task_embeddings = None
     if FLAGS.embedding_mode != "combined":
         task_embeddings = np.zeros((len(vocab), embedding_size), np.float32)
-        for w, i in vocab.iteritems():
+        for w, i in vocab.items():
             e = embeddings.get(w, embeddings.get(w.lower()))
             if e is None:
                 print("Not in embeddings: " + w)
@@ -81,7 +81,7 @@ def training(embeddings, FLAGS):
 
     tA, tB, idsA, idsB, lengthsA, lengthsB = None, None, None, None, None, None
 
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
         with tf.Session() as sess:
             tf.set_random_seed(rng.randint(0, 10000))
@@ -123,7 +123,7 @@ def training(embeddings, FLAGS):
                                                                       tA, tB, idsA, idsB, lengthsA, lengthsB,
                                                                       max_length=max_l, max_batch_size=batch_size)
                     size = min(len(dsA) - e_off, batch_size)
-                    allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA),np.min(lengthsB)))]
+                    allowed_conds = ["/cond_%d/" % (2*i) for i in range(min(np.min(lengthsA),np.min(lengthsB)))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
@@ -138,7 +138,7 @@ def training(embeddings, FLAGS):
                     for probs, w in zip(result[1:], current_weights):
                         op_weights_monitor[w.name[-11:]].extend(probs.tolist())
 
-                for k,v in op_weights_monitor.iteritems():
+                for k,v in op_weights_monitor.items():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
                     hist = (hist * 1000) / np.sum(hist)
                     print(k, hist.tolist())
@@ -211,11 +211,11 @@ def training(embeddings, FLAGS):
             pearsons.append(pr)
             spearmans.append(sr)
             mses.append(se)
-            print '######## Run %d #########' % run_id
-            print 'Test Pearson: %.4f' % pr
-            print 'Test Spearman: %.4f' % sr
-            print 'Test MSE: %.4f' % se
-            print '########################'
+            print('######## Run %d #########' % run_id)
+            print('Test Pearson: %.4f' % pr)
+            print('Test Spearman: %.4f' % sr)
+            print('Test MSE: %.4f' % se)
+            print('########################')
             os.remove('/tmp/my-model')
 
     mean_pearson = sum(pearsons) / len(pearsons)
@@ -228,11 +228,11 @@ def training(embeddings, FLAGS):
             d += (mean-el) * (mean-el)
         return math.sqrt(d/len(pop))
 
-    print '######## Overall #########'
-    print 'Test Pearson: %.4f (%.4f)' % (mean_pearson,  s_dev(mean_pearson, pearsons))
-    print 'Test Spearman: %.4f (%.4f)' % (mean_spearman,  s_dev(mean_spearman, spearmans))
-    print 'Test MSE: %.4f (%.4f)' % (mean_mse,  s_dev(mean_mse, mses))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Pearson: %.4f (%.4f)' % (mean_pearson,  s_dev(mean_pearson, pearsons)))
+    print('Test Spearman: %.4f (%.4f)' % (mean_spearman,  s_dev(mean_spearman, spearmans)))
+    print('Test MSE: %.4f (%.4f)' % (mean_mse,  s_dev(mean_mse, mses)))
+    print('########################')
 
     if FLAGS.result_file:
         with open(FLAGS.result_file, 'w') as f:
@@ -252,19 +252,19 @@ def load_data(loc):
     trainA, trainB, devA, devB, testA, testB = [],[],[],[],[],[]
     trainS, devS, testS = [],[],[]
 
-    with open(os.path.join(loc, 'SICK_train.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'SICK_train.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             trainA.append(text[1])
             trainB.append(text[2])
             trainS.append(text[3])
-    with open(os.path.join(loc, 'SICK_trial.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'SICK_trial.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             devA.append(text[1])
             devB.append(text[2])
             devS.append(text[3])
-    with open(os.path.join(loc, 'SICK_test_annotated.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'SICK_test_annotated.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             testA.append(text[1])
@@ -307,15 +307,15 @@ def batchify(batchA, batchB, padding, tA, tB, idsA, idsB, lengthsA, lengthsB, ma
     lengthsA = np.zeros([max_batch_size], np.int32) if lengthsA is None else lengthsA
     lengthsB = np.zeros([max_batch_size], np.int32) if lengthsB is None else lengthsB
 
-    for i in xrange(len(batchA)):
+    for i in range(len(batchA)):
         lengthsA[i] = len(batchA[i][0])
-        for j in xrange(len(batchA[i][0])):
+        for j in range(len(batchA[i][0])):
             tA[j][i] = batchA[i][0][j]
             idsA[j][i] = batchA[i][1][j]
 
-    for i in xrange(len(batchB)):
+    for i in range(len(batchB)):
         lengthsB[i] = len(batchB[i][0])
-        for j in xrange(len(batchB[i][0])):
+        for j in range(len(batchB[i][0])):
             tB[j][i] = batchB[i][0][j]
             idsB[j][i] = batchB[i][1][j]
 
@@ -367,7 +367,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cell, embeddings, emb
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
 
             inps = tf.split(0, length, inp)
-            for i in xrange(length):
+            for i in range(length):
                 inps[i] = tf.squeeze(inps[i], [0])
             _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
             out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
@@ -434,9 +434,9 @@ if __name__ == "__main__":
     if FLAGS.embedding_format == "glove":
         kwargs = {"vocab_size": 2196017, "dim": 300}
 
-    print "Loading embeddings..."
+    print("Loading embeddings...")
     e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
-    print "Done."
+    print("Done.")
 
     import json
     print("Configuration: ")

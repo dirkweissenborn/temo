@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 import random
+import functools
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -46,7 +47,7 @@ class MORUCell(RNNCell):
         acc = weights[0]
         for w in weights[1:]:
             acc += w
-        weights = [tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i) for i in xrange(len(weights))]
+        weights = [tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i) for i in range(len(weights))]
         return weights
 
     @property
@@ -101,7 +102,7 @@ class AssociativeGRUCell(RNNCell):
         self._input_size = num_units if input_size is None else input_size
         self._num_copies = num_copies
         self._read_only = read_only
-        self._permutations = [list(xrange(0, num_units/2)) for _ in xrange(self._num_copies-1)]
+        self._permutations = [list(range(0, int(num_units/2))) for _ in range(self._num_copies-1)]
         for perm in self._permutations:
             rng.shuffle(perm)
 
@@ -121,7 +122,7 @@ class AssociativeGRUCell(RNNCell):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
             if self._num_copies > 1:
                 with vs.variable_scope("Permutations"):
-                    perms = reduce(lambda x, y: x+y, self._permutations)
+                    perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
             old_h = tf.slice(state, [0, 0], [-1, self._num_units])
@@ -165,7 +166,7 @@ class AssociativeGRUCell(RNNCell):
         if self._num_copies > 1:
             reads = tf.split(1, self._num_copies, read)
             read = reads[0]
-            for i in xrange(1, self._num_copies):
+            for i in range(1, self._num_copies):
                 read += reads[i]
             read /= self._num_copies
         return read
@@ -185,7 +186,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
             if self._num_copies > 1:
                 with vs.variable_scope("Permutations"):
-                    perms = reduce(lambda x, y: x+y, self._permutations)
+                    perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
             old_h = tf.slice(state, [0, 0], [-1, self._num_units])
@@ -226,27 +227,6 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 h2 = uncomplexify(self._read(c_ks, complexify(read_mem)), "retrieved")
 
         return tf.concat(1, [new_h, h2]), tf.concat(1, [new_h, new_ss, read_mem])
-
-
-class ControlledAssociativeGRUCell(AssociativeGRUCell):
-    @property
-    def state_size(self):
-        return self._num_units * (self._num_copies+2)
-
-    def __call__(self, inputs, state, scope=None):
-        h = tf.slice(state, [0, 0], [-1, self._num_units])
-        s = tf.slice(state, [0, self._num_units], [-1, -1])
-        assoc_h, assoc_s = AssociativeGRUCell.__call__(self, inputs, s, scope)
-
-        with vs.variable_scope(scope or type(self).__name__):
-            with vs.variable_scope("Controller"):
-                with vs.variable_scope("Gates"):
-                    u, c = tf.split(1, 2, linear([assoc_h, inputs, h], 2 * self._num_units, True))
-                    u, c = sigmoid(u), tanh(c)
-                new_h = u * h + (1 - u) * c
-
-        return new_h, tf.concat(1, [new_h, assoc_s])
-
 
 
 def complexify(v, name=None):

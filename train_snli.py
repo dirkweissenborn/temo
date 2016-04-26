@@ -8,6 +8,7 @@ import os
 from tensorflow.python.ops.rnn import rnn
 import time
 import sys
+import functools
 
 
 def training(embeddings, FLAGS):
@@ -18,7 +19,7 @@ def training(embeddings, FLAGS):
 
     # embeddings
     task_embeddings = np.random.uniform(-0.05, 0.05, [len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
-    for w, i in vocab.iteritems():
+    for w, i in vocab.items():
         task_embeddings[len(oo_vocab) + i] = embeddings[w]
 
     # accumulate counts for buckets
@@ -48,7 +49,7 @@ def training(embeddings, FLAGS):
 
     idsA, idsB, lengthsA, lengthsB = None, None, None, None
 
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
         with tf.Session() as sess:
             tf.set_random_seed(rng.randint(0, 10000))
@@ -97,7 +98,7 @@ def training(embeddings, FLAGS):
                                                               max_length=max_l,
                                                               max_batch_size=batch_size)
                     size = min(len(dsA) - e_off, batch_size)
-                    allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA), np.min(lengthsB)))]
+                    allowed_conds = ["/cond_%d/" % (2*i) for i in range(min(np.min(lengthsA), np.min(lengthsB)))]
                     current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
                                     feed_dict={model["idsA"]: idsA[:,:size],
@@ -110,7 +111,7 @@ def training(embeddings, FLAGS):
                     for probs, w in zip(result[1:], current_weights):
                         op_weights_monitor[w.name[-11:]].extend(probs.tolist())
 
-                for k,v in op_weights_monitor.iteritems():
+                for k,v in op_weights_monitor.items():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
                     hist = (hist * 1000) / np.sum(hist)
                     print(k, hist.tolist())
@@ -120,7 +121,7 @@ def training(embeddings, FLAGS):
 
             saver = tf.train.Saver(tf.trainable_variables())
             sess.run(tf.initialize_all_variables())
-            num_params = reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
+            num_params = functools.reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
             print("Num params: %d" % num_params)
             print("Num params (without embeddings): %d" % (num_params - (len(oo_vocab) + len(vocab)) * embedding_size))
 
@@ -218,21 +219,21 @@ def load_data(loc, embeddings):
     trainA, trainB, devA, devB, testA, testB = [],[],[],[],[],[]
     trainS, devS, testS = [],[],[]
 
-    with open(os.path.join(loc, 'snli_1.0_train.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_train.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
                 trainA.append(text[5])
                 trainB.append(text[6])
                 trainS.append(text[0])
-    with open(os.path.join(loc, 'snli_1.0_dev.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_dev.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
                 devA.append(text[5])
                 devB.append(text[6])
                 devS.append(text[0])
-    with open(os.path.join(loc, 'snli_1.0_test.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_test.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
@@ -269,7 +270,7 @@ def load_data(loc, embeddings):
 
     def normalize_ids(ds):
         for word_ids in ds:
-            for i in xrange(len(word_ids)):
+            for i in range(len(word_ids)):
                 word_ids[i] += len(oo_vocab)
 
     normalize_ids(trainA)
@@ -305,14 +306,14 @@ def batchify(batchA, batchB, idsA, idsB, lengthsA, lengthsB, max_length=None, ma
     lengthsA = np.zeros([max_batch_size], np.int32) if lengthsA is None else lengthsA
     lengthsB = np.zeros([max_batch_size], np.int32) if lengthsB is None else lengthsB
 
-    for i in xrange(len(batchA)):
+    for i in range(len(batchA)):
         lengthsA[i] = len(batchA[i])
-        for j in xrange(len(batchA[i])):
+        for j in range(len(batchA[i])):
             idsA[j][i] = batchA[i][j]
 
-    for i in xrange(len(batchB)):
+    for i in range(len(batchB)):
         lengthsB[i] = len(batchB[i])
-        for j in xrange(len(batchB[i])):
+        for j in range(len(batchB[i])):
             idsB[j][i] = batchB[i][j]
 
     return idsA, idsB, lengthsA, lengthsB
@@ -360,7 +361,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
 
             inps = tf.split(0, length, inp)
-            for i in xrange(length):
+            for i in range(length):
                 inps[i] = tf.squeeze(inps[i], [0])
             outs, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
             last_out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
