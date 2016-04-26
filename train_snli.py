@@ -430,7 +430,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
     grads = tf.gradients(loss, train_params)
 
-    grads_params = zip(grads, train_params)
+    grads_params = list(zip(grads, train_params))
     grads_params_ex_emb = [(g,p) for (g,p) in grads_params if not p.name.endswith("E_fix")]
 
     update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params)
