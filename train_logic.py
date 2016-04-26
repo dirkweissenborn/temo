@@ -166,7 +166,7 @@ def training(FLAGS):
             converged = False
             accuracy = 0.0
             train_accuracy = 0.0
-            while not converged:
+            while not converged and epochs < FLAGS.max_epochs:
                 inp, ids, lengths = batchify(shuffled[offset:offset+batch_size],
                                               vocab["<padding>"],
                                               inp, ids, lengths,
@@ -362,12 +362,24 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
 
 
 if __name__ == "__main__":
+    import sys
+    print(sys.argv)
+
+    cell = "MORU"
+    mem_size = 16
+
+    if len(sys.argv) > 1:
+        cell = sys.argv[1]
+    if len(sys.argv) > 2:
+        mem_size = int(sys.argv[2])
+
+
     # data loading specifics
     tf.app.flags.DEFINE_string('data', 'data/logic', 'data dir of propositional logic unit test.')
 
     # model
     tf.app.flags.DEFINE_integer("input_size", 16, "input size of model")
-    tf.app.flags.DEFINE_integer("mem_size", 16, "hidden size of model")
+    tf.app.flags.DEFINE_integer("mem_size", mem_size, "hidden size of model")
 
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
@@ -376,7 +388,8 @@ if __name__ == "__main__":
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
-    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
+    tf.app.flags.DEFINE_integer("max_epochs", 100, "Maximum num of epochs")
+    tf.app.flags.DEFINE_string("cell", cell, "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 1, "How many runs.")
     tf.app.flags.DEFINE_integer("checkpoint", 10, "checkpoint at.")
