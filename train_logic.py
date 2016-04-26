@@ -84,6 +84,11 @@ def training(FLAGS):
 
     accuracies = []
     inp, ids, lengths = None, None, None
+
+    # assumes there is only one run!
+    best_dev_acc = 0.0
+    train_acc_for_best_dev = 0.0
+
     for run_id in xrange(FLAGS.runs):
         tf.reset_default_graph()
         with tf.Session() as sess:
@@ -201,6 +206,8 @@ def training(FLAGS):
                     if acc > accuracy:
                         accuracy = acc
                         saver.save(sess, '/tmp/my-model')
+                        best_dev_acc = acc
+                        train_acc_for_best_dev = train_accuracy
                     else:
                         if FLAGS.learning_rate_decay < 1.0:
                             print("Decaying learning rate.")
@@ -231,6 +238,13 @@ def training(FLAGS):
             f.write('Test Accuracy: %.4f (%.4f)\n\n' % (mean_accuracy, s_dev(mean_accuracy, accuracies)))
             f.write("Configuration: \n")
             f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
+
+    if FLAGS.summary_file:
+        # assumes there was only one run! otherwise this beraks
+        with open(FLAGS.summary_file, 'a') as f:
+            f.write('%s\t%d\t%.4f\t%.4f\t%.4f' %
+                    (FLAGS.cell, FLAGS.mem_size, train_acc_for_best_dev,
+                     best_dev_acc, mean_accuracy))
 
     print('######## Overall #########')
     print('Test Accuracy: %.4f (%.4f)' % (mean_accuracy, s_dev(mean_accuracy, accuracies)))
@@ -361,15 +375,16 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
-    tf.app.flags.DEFINE_integer("min_epochs", 100, "Minimum num of epochs")
-    tf.app.flags.DEFINE_string("cell", 'GRU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
+    tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
+    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
-    tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
+    tf.app.flags.DEFINE_integer("runs", 1, "How many runs.")
     tf.app.flags.DEFINE_integer("checkpoint", 10, "checkpoint at.")
     tf.app.flags.DEFINE_boolean('binary', True, 'binary evaluation')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
-    tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
-    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
+    tf.app.flags.DEFINE_string("result_file", "./results.txt", "Where to write results.")
+    tf.app.flags.DEFINE_string("summary_file", "./summary.txt", "Where to write result summary.")
+    tf.app.flags.DEFINE_string("moru_ops", 'max,keep,replace,mul,min,diff,forget', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
                                                        "Defaults to 0 for each.")
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
