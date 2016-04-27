@@ -2,7 +2,6 @@ import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 import random
 import functools
-import numpy as np
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -171,13 +170,17 @@ class AssociativeGRUCell(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
+    def __init__(self, num_units, num_copies=1, input_size=None, share=False, rng=None):
+        AssociativeGRUCell.__init__(self, num_units, num_copies=num_copies, input_size=input_size, read_only=False, rng=rng)
+        self._share = share
+
     @property
     def state_size(self):
         return self._num_units * (self._num_copies*2+1)
 
     @property
     def output_size(self):
-        return 2*self._num_units
+        return self._num_units
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
@@ -191,6 +194,8 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             read_mem = tf.slice(state, [0, self._num_units * (self._num_copies+1)], [-1, -1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
+                if self._share:
+                    tf.get_variable_scope().reuse_variables()
                 key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
                 if self._num_copies > 1:
                     k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
@@ -202,28 +207,24 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             with vs.variable_scope("Read"):
                 h = uncomplexify(self._read(c_key, c_ss), "retrieved")
 
-            if not self._read_only:
-                with vs.variable_scope("Gates"):  # Reset gate and update gate.
-                    # We start with bias of 1.0 to not reset and not update.
-                    r, u = array_ops.split(1, 2, linear([inputs, h],
-                                                         2 * self._num_units, True, 1.0))
-                    r, u = sigmoid(r), sigmoid(u)
-                with vs.variable_scope("Candidate"):
-                    c = tanh(linear([inputs, r * h], self._num_units, True))
-
-                to_add = u * (c - h)
-                to_add_r, to_add_i = tf.split(1, 2, to_add)
-                c_to_add = (tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
-                new_ss = old_ss + uncomplexify(_comp_mul(key, c_to_add))
-                new_h = tf.add(h, to_add, "out")
-            else:
-                new_h = h
-                new_ss = old_ss
-
             with vs.variable_scope("Read_Given"):
                 h2 = uncomplexify(self._read(c_key, complexify(read_mem)), "retrieved")
 
-        return tf.concat(1, [new_h, h2]), tf.concat(1, [new_h, new_ss, read_mem])
+            with vs.variable_scope("DualGates"):  # Reset gate and update gate.
+                # We start with bias of 1.0 to not reset and not update.
+                r, u = array_ops.split(1, 2, linear([inputs, h, h2],
+                                                     2 * self._num_units, True, 1.0))
+                r, u = sigmoid(r), sigmoid(u)
+            with vs.variable_scope("DualCandidate"):
+                c = tanh(linear([inputs, h2, r * h], self._num_units, True))
+
+            to_add = u * (c - h)
+            to_add_r, to_add_i = tf.split(1, 2, to_add)
+            c_to_add = (tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
+            new_ss = old_ss + uncomplexify(_comp_mul(key, c_to_add))
+            new_h = tf.add(h, to_add, "out")
+
+        return new_h, tf.concat(1, [new_h, new_ss, read_mem])
 
 
 def complexify(v, name=None):

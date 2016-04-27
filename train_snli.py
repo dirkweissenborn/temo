@@ -69,7 +69,7 @@ def training(embeddings, FLAGS):
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
                 cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, rng=random.Random(123))
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, rng=random.Random(123))
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, share=True, rng=random.Random(123))
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -382,7 +382,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 E = create_embeddings()
                 _, c, outsA = my_rnn(idsA, cellA, lengthsA, E)
             #with tf.variable_scope("assoc_m2", initializer=initializer):
-                tf.get_variable_scope().reuse_variables()
+                #tf.get_variable_scope().reuse_variables()
                 #_, _, outsB = my_rnn(idsB, prepro_cell, lengthsB)
                 rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size], tf.float32)
                 rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
