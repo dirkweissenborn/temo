@@ -132,11 +132,38 @@ def training(FLAGS):
                     size = min(len(ds) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
                     current_weights = list(filter(lambda w: any(c in w.name for c in allowed_conds), op_weights))
+                    #random.shuffle(current_weights)
+                    #result = sess.run([model["probs"]] + current_weights[:10],
+                    #               feed_dict={model["inp"]: inp[:,:size],
+                    #                          model["ids"]: ids[:,:size],
+                    #                          model["lengths"]: lengths[:size]})
                     random.shuffle(current_weights)
-                    result = sess.run([model["probs"]] + current_weights[:10],
-                                   feed_dict={model["inp"]: inp[:,:size],
-                                              model["ids"]: ids[:,:size],
-                                              model["lengths"]: lengths[:size]})
+                    result = sess.run([model["probs"]] + current_weights,
+                                      feed_dict={model["inp"]: inp[:, :size],
+                                                 model["ids"]: ids[:, :size],
+                                                 model["lengths"]: lengths[
+                                                                   :size]})
+
+                    weights = result[1:]
+                    print("ids shape: ", ids.shape)
+                    print("weights shape: (" + str(len(weights)) +
+                          ", " + str(len(weights[0])) +
+                          ", " + str(len(weights[0][0])) +")")
+                    # ids: 9 × 50
+                    # weights: 42 × 50 × 8
+                    # todo: unclear why 42? which weight corresponds to which op?
+
+                    for i in range(0, batch_size):
+                        print(i)
+                        print("symbols")
+                        for j in range(0, len(ids)):
+                            print(ids[j][i])
+                        print("weights")
+                        for j in range(0, len(weights)):
+                            print(len(weights[j][i]))
+                        print()
+                    os._exit(0)
+
                     y = encode_labels(ds[e_off:e_off + batch_size], FLAGS.binary)
                     accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y))
                     for probs, w in zip(result[1:], current_weights):
@@ -200,9 +227,6 @@ def training(FLAGS):
                     train_accuracy /= (i * batch_size)
                     sess.run(model["keep_prob"].initializer)
                     print("Train loss: %.3f, Accuracy: %.3f, Accuracy on Dev: %.3f" % (loss, train_accuracy, acc))
-                    i = 0
-                    loss = 0.0
-                    train_accuracy = 0.0
                     if acc > accuracy:
                         accuracy = acc
                         saver.save(sess, '/tmp/my-model')
@@ -215,6 +239,9 @@ def training(FLAGS):
                             sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
                         if epochs >= FLAGS.min_epochs:
                             break
+                    i = 0
+                    loss = 0.0
+                    train_accuracy = 0.0
 
             saver.restore(sess, '/tmp/my-model')
             sess.run(model["keep_prob"].assign(1.0))
@@ -240,9 +267,9 @@ def training(FLAGS):
             f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
 
     if FLAGS.summary_file:
-        # assumes there was only one run! otherwise this beraks
+        # assumes there was only one run! otherwise this breaks
         with open(FLAGS.summary_file, 'a') as f:
-            f.write('%s\t%d\t%.4f\t%.4f\t%.4f' %
+            f.write('%s\t%d\t%.4f\t%.4f\t%.4f\n' %
                     (FLAGS.cell, FLAGS.mem_size, train_acc_for_best_dev,
                      best_dev_acc, mean_accuracy))
 
@@ -366,7 +393,7 @@ if __name__ == "__main__":
     print(sys.argv)
 
     cell = "MORU"
-    mem_size = 16
+    mem_size = 8
 
     if len(sys.argv) > 1:
         cell = sys.argv[1]
@@ -387,7 +414,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
-    tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
+    tf.app.flags.DEFINE_integer("min_epochs", 100, "Minimum num of epochs")
     tf.app.flags.DEFINE_integer("max_epochs", 100, "Maximum num of epochs")
     tf.app.flags.DEFINE_string("cell", cell, "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
