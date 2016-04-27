@@ -110,8 +110,6 @@ def _comp_mul(x, y):
     return tf.complex(tf.real(x) * tf.real(y) - tf.imag(x) * tf.imag(y),
                       tf.real(x) * tf.imag(y) + tf.imag(x) * tf.real(y))
 
-tf.gen_array_ops._op_def_lib.add_op()
-
 class AssociativeGRUCell(RNNCell):
 
     def __init__(self, num_units, num_copies=1, input_size=None, read_only=False, rng=None):
