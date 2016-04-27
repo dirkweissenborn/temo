@@ -2,6 +2,7 @@ import tensorflow as tf
 from tensorflow.models.rnn.rnn_cell import *
 import random
 import functools
+import numpy as np
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -93,6 +94,24 @@ class MORUCell(RNNCell):
             return new_c, new_c
 
 
+# These ops (_comp_conj, tf.mul) are not supported natively by tensorflow for complex numbers in cuda
+def _comp_conj(x):
+    return tf.complex(tf.real(x), -tf.imag(x))
+
+def _comp_add(x, y):
+    return tf.complex(tf.real(x)+tf.real(y), tf.imag(x)+tf.imag(y))
+
+def _comp_add_n(xs):
+    xs_real = [tf.real(x) for x in xs]
+    xs_imag = [tf.imag(x) for x in xs]
+    return tf.complex(tf.add_n(xs_real), tf.add_n(xs_imag))
+
+def _comp_mul(x, y):
+    return tf.complex(tf.real(x) * tf.real(y) - tf.imag(x) * tf.imag(y),
+                      tf.real(x) * tf.imag(y) + tf.imag(x) * tf.real(y))
+
+tf.gen_array_ops._op_def_lib.add_op()
+
 class AssociativeGRUCell(RNNCell):
 
     def __init__(self, num_units, num_copies=1, input_size=None, read_only=False, rng=None):
@@ -129,15 +148,15 @@ class AssociativeGRUCell(RNNCell):
             old_ss = tf.slice(state, [0, self._num_units], [-1,-1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs, old_h], self._num_units, True)))
-                k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
+                key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
+                k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]), [1, 0])
                 if self._num_copies > 1:
-                    k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
-                k_real, k_imag = tf.split(0, 2, tf.transpose(k))
+                    k = tf.concat(0, [k, tf.gather(k, perms)])
+                k_real, k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
                 ks = tf.complex(k_real, k_imag)
 
             with vs.variable_scope("Read"):
-                h = uncomplexify(self._read(tf.conj(ks), c_ss), "retrieved")
+                h = uncomplexify(self._read(_comp_conj(ks), c_ss), "retrieved")
 
             if not self._read_only:
                 with vs.variable_scope("Gates"):  # Reset gate and update gate.
@@ -151,24 +170,20 @@ class AssociativeGRUCell(RNNCell):
                 to_add = u * (c - h)
                 to_add_r, to_add_i = tf.split(1, 2, to_add)
                 c_to_add = tf.complex(tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
-                new_ss = uncomplexify(c_ss + ks * c_to_add)
+                new_ss = old_ss + uncomplexify(_comp_mul(ks, c_to_add))
                 new_h = tf.add(h, to_add, "out")
             else:
                 new_h = h
                 new_ss = old_ss
 
-        #key = uncomplexify(key, "key")
-
         return new_h, tf.concat(1, [new_h, new_ss])
 
     def _read(self, keys, redundant_states):
-        read = keys * redundant_states
+        read = _comp_mul(keys, redundant_states)
         if self._num_copies > 1:
-            reads = tf.split(1, self._num_copies, read)
-            read = reads[0]
-            for i in range(1, self._num_copies):
-                read += reads[i]
-            read /= self._num_copies
+            xs_real = tf.split(1, self._num_copies, tf.real(read))
+            xs_imag = tf.split(1, self._num_copies, tf.imag(read))
+            read = tf.complex(tf.add_n(xs_real)/self._num_copies, tf.add_n(xs_imag)/self._num_copies)
         return read
 
 
@@ -195,12 +210,12 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
-                k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]))
+                k = tf.transpose(tf.concat(0, [tf.real(key), tf.imag(key)]), [1, 0])
                 if self._num_copies > 1:
-                    k = tf.concat(0, [k, tf.nn.embedding_lookup(k, perms)])
-                k_real, k_imag = tf.split(0, 2, tf.transpose(k))
+                    k = tf.concat(0, [k, tf.gather(k, perms)])
+                k_real, k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
                 ks = tf.complex(k_real, k_imag)
-                c_ks = tf.conj(ks)
+                c_ks = _comp_conj(ks)
 
             with vs.variable_scope("Read"):
                 h = uncomplexify(self._read(c_ks, c_ss), "retrieved")
@@ -217,7 +232,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 to_add = u * (c - h)
                 to_add_r, to_add_i = tf.split(1, 2, to_add)
                 c_to_add = tf.complex(tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
-                new_ss = uncomplexify(c_ss + ks * c_to_add)
+                new_ss = old_ss + uncomplexify(_comp_mul(ks, c_to_add))
                 new_h = tf.add(h, to_add, "out")
             else:
                 new_h = h

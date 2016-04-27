@@ -124,7 +124,7 @@ def training(embeddings, FLAGS):
                                                                       max_length=max_l, max_batch_size=batch_size)
                     size = min(len(dsA) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % (2*i) for i in range(min(np.min(lengthsA),np.min(lengthsB)))]
-                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    current_weights = [w for w in op_weights if any(c in w.name for c in allowed_conds)]
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
                                     feed_dict={model["inpA"]: tA[:,:size],
