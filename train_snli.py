@@ -51,7 +51,7 @@ def training(embeddings, FLAGS):
 
     for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
-        with tf.Session() as sess:
+        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             tf.set_random_seed(rng.randint(0, 10000))
             rng2 = random.Random(rng.randint(0, 10000))
 
