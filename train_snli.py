@@ -401,16 +401,21 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 _, _, outsB = my_rnn(idsB, cellB, lengthsB, E, init_state=c)
 
 
+            avg_p = tf.add_n(outsA) / tf.cast(lengthsA, tf.float32)
+            avg_h = tf.add_n(outsB) / tf.cast(lengthsB, tf.float32)
+
 #            with tf.variable_scope("premise", initializer=initializer):
  #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
   #                               lengthsA, additional_inputs=tf.pack(outsA))
 
             with tf.variable_scope("accumulator", initializer=initializer):
-                p, _, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
+                p, _, outsP = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
                                  lengthsA, additional_inputs=tf.pack(outsA)) #, init_state=s)
                 tf.get_variable_scope().reuse_variables()
-                h, _, _ = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
+                h, _, outsH = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
                                  lengthsB, additional_inputs=tf.pack(outsB)) #, init_state=s)
+
+            h = tf.concat(1, [avg_p, avg_h, p, h, tf.abs(p-h)])
         else:
             if keep_prob < 1.0:
                 cellA = DropoutWrapper(cellA, keep_prob_var)
@@ -420,8 +425,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
                 tf.get_variable_scope().reuse_variables()
                 h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
-
-        h = tf.concat(1, [p, h, tf.abs(p-h)])
+            h = tf.concat(1, [p, h, tf.abs(p-h)])
 
         #with tf.variable_scope("hypothesis", initializer=initializer):
          #   hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
