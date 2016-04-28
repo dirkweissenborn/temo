@@ -383,7 +383,6 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             #     _, _, outsB = my_rnn(idsB, prepro_cell, lengthsB, E)
             with tf.variable_scope("assoc_m", initializer=initializer):
                 #_, _, outsA = my_rnn(idsA, prepro_cell, lengthsA)
-                E = create_embeddings()
                 #_, c, outsA = my_rnn(None, cellA, lengthsA, None, additional_inputs=tf.pack(outsA))
                 _, c, outsA = my_rnn(idsA, cellA, lengthsA, E)
             #with tf.variable_scope("assoc_m2", initializer=initializer):
