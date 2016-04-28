@@ -446,8 +446,8 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
     grads_params = list(zip(grads, train_params))
     grads_params_ex_emb = [(g,p) for (g,p) in grads_params if not p.name.endswith("E_fix")]
 
-    update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params)
-    update_exclude_embeddings = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params_ex_emb)
+    update = tf.train.AdamOptimizer(learning_rate).apply_gradients(grads_params)
+    update_exclude_embeddings = tf.train.AdamOptimizer(learning_rate).apply_gradients(grads_params_ex_emb)
     return {"idsA":idsA, "idsB":idsB, "lengthsA":lengthsA, "lengthsB":lengthsB, "y":y,
             "probs":probs, "scores":scores,"keep_prob": keep_prob_var,
             "loss":loss, "update":update, "update_ex":update_exclude_embeddings}
