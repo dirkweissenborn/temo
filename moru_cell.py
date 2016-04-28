@@ -130,13 +130,12 @@ class AssociativeGRUCell(RNNCell):
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, old_h], 2*self._num_units, False)))
+                r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
+                r_k_imag, w_k_imag = tf.split(1, 2, _comp_imag(key))
                 if self._num_copies > 1:
-                    k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
+                    k = tf.transpose(tf.concat(0, [r_k_real, w_k_real, r_k_imag, w_k_imag]), [1, 0])
                     k = tf.concat(0, [k, tf.gather(k, perms)])
                     r_k_real, w_k_real, r_k_imag, w_k_imag = tf.split(0, 4, tf.transpose(k, [1, 0]))
-                else:
-                    r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
-                    r_k_imag, w_k_imag = tf.split(1, 2, _comp_real(key))
                 r_key = (r_k_real, r_k_imag)
                 w_key = (w_k_real, w_k_imag)
 
@@ -201,13 +200,12 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 if self._share:
                     tf.get_variable_scope().reuse_variables()
                 key = bound(complexify(linear([inputs, old_h], 2*self._num_units, False)))
+                r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
+                r_k_imag, w_k_imag = tf.split(1, 2, _comp_imag(key))
                 if self._num_copies > 1:
-                    k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
+                    k = tf.transpose(tf.concat(0, [r_k_real, w_k_real, r_k_imag, w_k_imag]), [1, 0])
                     k = tf.concat(0, [k, tf.gather(k, perms)])
                     r_k_real, w_k_real, r_k_imag, w_k_imag = tf.split(0, 4, tf.transpose(k, [1, 0]))
-                else:
-                    r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
-                    r_k_imag, w_k_imag = tf.split(1, 2, _comp_real(key))
                 r_key = (r_k_real, r_k_imag)
                 w_key = (w_k_real, w_k_imag)
 
