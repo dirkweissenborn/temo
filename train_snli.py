@@ -134,6 +134,7 @@ def training(embeddings, FLAGS):
             i = 0
             accuracy = float("-inf")
             step_time = 0.0
+            epoch_acc = 0.0
             while not FLAGS.eval:
                 start_time = time.time()
                 idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
@@ -161,9 +162,16 @@ def training(embeddings, FLAGS):
 
                 if offset + batch_size > len(shuffledA):
                     epochs += 1
-                    print("\n%d epochs done" % epochs)
                     shuffledA, shuffledB, y = shuffle(shuffledA, shuffledB, y, random_state=rng2.randint(0, 1000))
                     offset = 0
+                    acc = evaluate(devA, devB, y_scores[1])
+                    print("\n%d epochs done! Accuracy on Dev: %.3f" % (epochs, acc))
+                    if acc < epoch_acc + 1e-3:
+                        print("Decaying learning-rate!")
+                        lr = tf.get_variable("model/lr")
+                        sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
+                    epoch_acc = acc
+
                 if i == FLAGS.checkpoint:
                     loss /= i
                     sess.run(model["keep_prob"].assign(1.0))
@@ -178,8 +186,6 @@ def training(embeddings, FLAGS):
                         accuracy = acc
                         saver.save(sess, FLAGS.model_path)
                     else:
-                        lr = tf.get_variable("model/lr")
-                        sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
                         if epochs >= FLAGS.min_epochs:
                             break
 
@@ -436,7 +442,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             loss = loss+l2_loss
 
     grads = tf.gradients(loss, train_params)
-
+    grads, _ = tf.clip_by_global_norm(grads, 5.0)
     grads_params = list(zip(grads, train_params))
     grads_params_ex_emb = [(g,p) for (g,p) in grads_params if not p.name.endswith("E_fix")]
 
@@ -460,7 +466,7 @@ if __name__ == "__main__":
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0, "Learning rate decay when loss on validation set does not improve.")
+    tf.app.flags.DEFINE_float("learning_rate_decay", 0.5, "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 3, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
