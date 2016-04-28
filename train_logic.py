@@ -130,7 +130,7 @@ def training(FLAGS):
                                                  max_length=max_l,
                                                  max_batch_size=batch_size)
                     size = min(len(ds) - e_off, batch_size)
-                    allowed_conds = ["/cond_%d/" % i for i in xrange(np.min(lengths))]
+                    allowed_conds = ["/cond/"] + ["/cond_%d/" % i for i in range(1, np.min(lengths))]
                     current_weights = list(filter(lambda w: any(c in w.name for c in allowed_conds), op_weights))
                     #random.shuffle(current_weights)
                     #result = sess.run([model["probs"]] + current_weights[:10],
@@ -413,7 +413,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
     tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
-    tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
+    tf.app.flags.DEFINE_integer("batch_size", 5, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 100, "Minimum num of epochs")
     tf.app.flags.DEFINE_integer("max_epochs", 100, "Maximum num of epochs")
     tf.app.flags.DEFINE_string("cell", cell, "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
