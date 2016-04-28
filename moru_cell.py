@@ -210,13 +210,21 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             with vs.variable_scope("Read_Given"):
                 h2 = uncomplexify(self._read(c_key, complexify(read_mem)), "retrieved")
 
-            with vs.variable_scope("DualGates"):  # Reset gate and update gate.
-                # We start with bias of 1.0 to not reset and not update.
-                r, u = array_ops.split(1, 2, linear([inputs, h, h2],
-                                                     2 * self._num_units, True, 1.0))
-                r, u = sigmoid(r), sigmoid(u)
+            with vs.variable_scope("Gates"):
+                if self._share:
+                    tf.get_variable_scope().reuse_variables()
+                gs = linear([inputs, h], 2 * self._num_units, True, 1.0)
+            with vs.variable_scope("DualGates"):
+                gs = sigmoid(gs + linear([h2], 2 * self._num_units, False))
+            r, u = tf.split(1, 2, gs)
+
+            with vs.variable_scope("Candidate"):
+                if self._share:
+                    tf.get_variable_scope().reuse_variables()
+                c = linear([inputs, r * h], self._num_units, True)
+
             with vs.variable_scope("DualCandidate"):
-                c = tanh(linear([inputs, h2, r * h], self._num_units, True))
+                c = tanh(c + linear([h2], self._num_units, False))
 
             to_add = u * (c - h)
             to_add_r, to_add_i = tf.split(1, 2, to_add)
@@ -243,7 +251,7 @@ def bound(v, name=None):
     return (re_v / v_modulus, im_v / v_modulus, name)
 
 
-# These ops (_comp_conj, tf.mul) are not supported natively by tensorflow for complex numbers in cuda
+# Much faster than using native tensorflow complex datastructure
 def _comp_conj(x):
     return (_comp_real(x), -_comp_imag(x))
 

@@ -394,7 +394,10 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
  #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
   #                               lengthsA, additional_inputs=tf.pack(outsA))
 
-            with tf.variable_scope("hypothesis", initializer=initializer):
+            with tf.variable_scope("accumulator", initializer=initializer):
+                p, _, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
+                                 lengthsA, additional_inputs=tf.pack(outsA)) #, init_state=s)
+                tf.get_variable_scope().reuse_variables()
                 h, _, _ = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
                                  lengthsB, additional_inputs=tf.pack(outsB)) #, init_state=s)
         else:
@@ -402,21 +405,20 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 cellA = DropoutWrapper(cellA, keep_prob_var)
                 cellB = DropoutWrapper(cellB, keep_prob_var)
             E = create_embeddings()
-            with tf.variable_scope("premise", initializer=initializer):
+            with tf.variable_scope("rnn", initializer=initializer):
                 p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
-            with tf.variable_scope("hypothesis", initializer=initializer):
+                tf.get_variable_scope().reuse_variables()
                 h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
-            h = tf.concat(1, [p, h])
 
-
-
+        h = tf.concat(1, [p, h, tf.abs(p-h)])
 
         #with tf.variable_scope("hypothesis", initializer=initializer):
          #   hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
         #h = tf.concat(1, [p, h])
         #h = hypothesis
-        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
+
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0,x),  #use rectifier
                                               weight_init=None)
         scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
         probs = tf.nn.softmax(scores)
