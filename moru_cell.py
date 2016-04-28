@@ -129,15 +129,19 @@ class AssociativeGRUCell(RNNCell):
             old_ss = tf.slice(state, [0, self._num_units], [-1,-1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
+                key = bound(complexify(linear([inputs, old_h], 2*self._num_units, False)))
                 if self._num_copies > 1:
                     k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
                     k = tf.concat(0, [k, tf.gather(k, perms)])
-                    k_real, k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
-                    key = (k_real, k_imag)
+                    r_k_real, w_k_real, r_k_imag, w_k_imag = tf.split(0, 4, tf.transpose(k, [1, 0]))
+                else:
+                    r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
+                    r_k_imag, w_k_imag = tf.split(1, 2, _comp_real(key))
+                r_key = (r_k_real, r_k_imag)
+                w_key = (w_k_real, w_k_imag)
 
             with vs.variable_scope("Read"):
-                h = uncomplexify(self._read(_comp_conj(key), c_ss), "retrieved")
+                h = uncomplexify(self._read(r_key, c_ss), "retrieved")
 
             if not self._read_only:
                 with vs.variable_scope("Gates"):  # Reset gate and update gate.
@@ -151,7 +155,7 @@ class AssociativeGRUCell(RNNCell):
                 to_add = u * (c - h)
                 to_add_r, to_add_i = tf.split(1, 2, to_add)
                 c_to_add = (tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
-                new_ss = old_ss + uncomplexify(_comp_mul(key, c_to_add))
+                new_ss = old_ss + uncomplexify(_comp_mul(w_key, c_to_add))
                 new_h = tf.add(h, to_add, "out")
             else:
                 new_h = h
@@ -196,19 +200,22 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             with vs.variable_scope("Keys"):
                 if self._share:
                     tf.get_variable_scope().reuse_variables()
-                key = bound(complexify(linear([inputs, old_h], self._num_units, False)))
+                key = bound(complexify(linear([inputs, old_h], 2*self._num_units, False)))
                 if self._num_copies > 1:
                     k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
                     k = tf.concat(0, [k, tf.gather(k, perms)])
-                    k_real, k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
-                    key = (k_real, k_imag)
-                c_key = _comp_conj(key)
+                    r_k_real, w_k_real, r_k_imag, w_k_imag = tf.split(0, 4, tf.transpose(k, [1, 0]))
+                else:
+                    r_k_real, w_k_real = tf.split(1, 2, _comp_real(key))
+                    r_k_imag, w_k_imag = tf.split(1, 2, _comp_real(key))
+                r_key = (r_k_real, r_k_imag)
+                w_key = (w_k_real, w_k_imag)
 
             with vs.variable_scope("Read"):
-                h = uncomplexify(self._read(c_key, c_ss), "retrieved")
+                h = uncomplexify(self._read(r_key, c_ss), "retrieved")
 
             with vs.variable_scope("Read_Given"):
-                h2 = uncomplexify(self._read(c_key, complexify(read_mem)), "retrieved")
+                h2 = uncomplexify(self._read(_comp_conj(w_key), complexify(read_mem)), "retrieved")
 
             with vs.variable_scope("Gates"):
                 if self._share:
@@ -229,7 +236,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             to_add = u * (c - h)
             to_add_r, to_add_i = tf.split(1, 2, to_add)
             c_to_add = (tf.tile(to_add_r, [1, self._num_copies]), tf.tile(to_add_i, [1, self._num_copies]))
-            new_ss = old_ss + uncomplexify(_comp_mul(key, c_to_add))
+            new_ss = old_ss + uncomplexify(_comp_mul(w_key, c_to_add))
             new_h = tf.add(h, to_add, "out")
 
         return new_h, tf.concat(1, [new_h, new_ss, read_mem])
