@@ -18,7 +18,7 @@ def training(embeddings, FLAGS):
     trainA, trainB, devA, devB, testA, testB, y_scores, vocab, oo_vocab = load_data(FLAGS.data, embeddings)
 
     # embeddings
-    task_embeddings = np.random.uniform(-0.05, 0.05, [len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
+    task_embeddings = np.random.normal(size=[len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
     for w, i in vocab.items():
         task_embeddings[len(oo_vocab) + i] = embeddings[w]
 
