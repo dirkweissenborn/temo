@@ -50,7 +50,7 @@ tf.app.flags.DEFINE_boolean("decode", False,
                             "Set to True for interactive decoding.")
 tf.app.flags.DEFINE_boolean("self_test", False,
                             "Run a self-test if this is set to True.")
-tf.app.flags.DEFINE_boolean("device", "/cpu:0", "Run on device.")
+tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -96,11 +96,12 @@ def read_data(source_path, target_path, max_length, max_size=None):
 
 def create_model(session, forward_only, max_length):
     """Create translation model and initialize or load parameters in session."""
-    model = seq2seq_model.Seq2SeqModel(
-        FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
-        FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
-        FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
-        forward_only=forward_only)
+    with tf.device(FLAGS.device):
+        model = seq2seq_model.Seq2SeqModel(
+            FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
+            FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
+            FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
+            forward_only=forward_only)
     ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
     if ckpt and tf.gfile.Exists(ckpt.model_checkpoint_path):
         print("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -118,7 +119,8 @@ def train():
     en_train, fr_train, en_dev, fr_dev, en_test, fr_test, _, _ = data_utils.prepare_wmt_data(
         FLAGS.data_dir, FLAGS.en_vocab_size, FLAGS.fr_vocab_size)
 
-    with tf.Session() as sess:
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
+                                          gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.8))) as sess:
         # Read data.
         print ("Reading development and training data (limit: %d)."
                % FLAGS.max_train_data_size)
@@ -127,9 +129,9 @@ def train():
         max_length = max(l, max_length)
         train_total_size = len(train_set)
 
-        with tf.device(FLAGS.device):
-            print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
-            model = create_model(sess, False, max_length)
+
+        print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
+        model = create_model(sess, False, max_length)
 
         # This is the training loop.
         step_time, loss = 0.0, 0.0
@@ -169,10 +171,9 @@ def train():
 
 
 def decode():
-    with tf.Session() as sess:
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         # Create model and load parameters.
-        with tf.device(FLAGS.device):
-            model = create_model(sess, True, FLAGS.max_length)
+        model = create_model(sess, True, FLAGS.max_length)
         model.batch_size = 1  # We decode one sentence at a time.
 
         # Load vocabularies.
@@ -209,11 +210,12 @@ def decode():
 
 def self_test():
     """Test the translation model."""
-    with tf.Session() as sess:
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,log_device_placement=True)) as sess:
         print("Self-test for neural translation model.")
         # Create model with vocabularies of 10, 2 layers of 32.
-        model = seq2seq_model.Seq2SeqModel(10, 10, 6, 32, 2,
-                                           5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
+        with tf.device(FLAGS.device):
+            model = seq2seq_model.Seq2SeqModel(10, 10, 6, 32, 2,
+                                               5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
         sess.run(tf.initialize_all_variables())
 
         # Fake data set for both the (3, 3) and (6, 6) bucket.
