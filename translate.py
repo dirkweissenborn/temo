@@ -28,7 +28,7 @@ from wmt14 import data_utils
 from wmt14 import seq2seq_model
 
 
-tf.app.flags.DEFINE_float("learning_rate", 0.5, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
 tf.app.flags.DEFINE_float("learning_rate_decay_factor", 0.99,
                           "Learning rate decays by this much.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 5.0,
@@ -39,7 +39,8 @@ tf.app.flags.DEFINE_integer("num_layers", 1, "Number of layers in the model.")
 tf.app.flags.DEFINE_integer("en_vocab_size", 15000, "English vocabulary size.")
 tf.app.flags.DEFINE_integer("fr_vocab_size", 15000, "French vocabulary size.")
 tf.app.flags.DEFINE_string("data_dir", "/tmp", "Data directory")
-tf.app.flags.DEFINE_string("train_dir", "/tmp", "Training directory.")
+tf.app.flags.DEFINE_string("train_dir", "/tmp/wmt14", "Training directory.")
+tf.app.flags.DEFINE_string("cell_type", "GRU", "Type of cell to use.")
 tf.app.flags.DEFINE_integer("max_train_data_size", 0,
                             "Limit on the size of training data (0: no limit).")
 tf.app.flags.DEFINE_integer("max_length", 50, "limit length of sentences.")
@@ -71,23 +72,25 @@ def read_data(source_path, target_path, max_length, max_size=None):
     """
     data_set = []
     m_length = 0
+    print("Reading from source: %s ; and target: %s" % (source_path, target_path))
     with tf.gfile.GFile(source_path, mode="r") as source_file:
         with tf.gfile.GFile(target_path, mode="r") as target_file:
-            source, target = source_file.readline(), target_file.readline()
             counter = 0
+            source, target = source_file.readline(), target_file.readline()
             while source and target and (not max_size or counter < max_size):
-                counter += 1
-                if counter % 100000 == 0:
-                    print("  reading data line %d" % counter)
-                    sys.stdout.flush()
                 source_ids = [int(x) for x in source.split()]
                 target_ids = [int(x) for x in target.split()]
                 target_ids.append(data_utils.EOS_ID)
                 if len(source_ids) < max_length and len(target_ids) < max_length:
+                    counter += 1
+                    if counter % 100000 == 0:
+                        print("  reading data line %d" % counter)
+                        sys.stdout.flush()
                     m_length = max(len(target_ids), max(len(source_ids), m_length))
                     data_set.append([source_ids, target_ids])
-                if max_size is not None and counter >= max_size:
-                    break
+                    if max_size is not None and max_size >  0 and counter >= max_size:
+                        break
+                source, target = source_file.readline(), target_file.readline()
     return data_set, m_length
 
 
@@ -96,7 +99,7 @@ def create_model(session, forward_only, max_length):
     model = seq2seq_model.Seq2SeqModel(
         FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
         FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
-        FLAGS.learning_rate, FLAGS.learning_rate_decay_factor,
+        FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
         forward_only=forward_only)
     ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
     if ckpt and tf.gfile.Exists(ckpt.model_checkpoint_path):
@@ -210,7 +213,7 @@ def self_test():
         print("Self-test for neural translation model.")
         # Create model with vocabularies of 10, 2 layers of 32.
         model = seq2seq_model.Seq2SeqModel(10, 10, 6, 32, 2,
-                                           5.0, 32, 0.3, 0.99, num_samples=8)
+                                           5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
         sess.run(tf.initialize_all_variables())
 
         # Fake data set for both the (3, 3) and (6, 6) bucket.

@@ -28,7 +28,7 @@ import tensorflow as tf
 
 from wmt14 import data_utils
 from wmt14 import my_seq2seq
-
+from moru_cell import *
 
 
 class Seq2SeqModel(object):
@@ -95,26 +95,49 @@ class Seq2SeqModel(object):
                                                       self.target_vocab_size)
             softmax_loss_function = sampled_loss
 
-        # Create the internal multi-layer cell for our RNN.
-        single_cell = None
-        if cell_type == "GRU":
-            single_cell = tf.nn.rnn_cell.GRUCell(size)
-        else:
-            single_cell = tf.nn.rnn_cell.BasicLSTMCell(size)
-
-        cell = single_cell
-        if num_layers > 1:
-            cell = tf.nn.rnn_cell.MultiRNNCell([single_cell] * num_layers)
-
         # The seq2seq function: we use embedding for the input and attention.
         def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
-            return my_seq2seq.embedding_attention_seq2seq(
-                encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
-                num_encoder_symbols=source_vocab_size,
-                num_decoder_symbols=target_vocab_size,
-                embedding_size=size,
-                output_projection=output_projection,
-                feed_previous=do_decode)
+            if cell_type == "AssociativeGRU":
+                source_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
+                target_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, share=False, rng=random.Random(123))
+
+                source_cell = EmbeddingWrapper(source_cell, source_vocab_size, size)
+
+                print("Use AssociativeGRU")
+                with tf.variable_scope("source"):
+                    with tf.variable_scope("assoc"):
+                        source_out, c = my_seq2seq.my_rnn(source_cell, encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
+                        source_out = [tf.reshape(o, [-1, size]) for o in source_out]
+                    with tf.variable_scope("rnn"):
+                        _, final_source_state = my_seq2seq.my_rnn(GRUCell(source_cell.output_size, source_cell.output_size),
+                                                                  source_out, sequence_length=encoder_length, dtype=tf.float32)
+
+                with tf.variable_scope("target"):
+                    rest_state = tf.zeros([batch_size, target_cell.state_size - source_cell.state_size + source_cell.output_size], tf.float32)
+                    c = tf.concat(1, [rest_state, tf.slice(c, [0, source_cell.output_size], [-1, -1]), final_source_state])
+
+                    target_cell = tf.nn.rnn_cell.MultiRNNCell([target_cell, GRUCell(source_cell.output_size, source_cell.output_size)])
+                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, target_cell,
+                                                            target_vocab_size, size, output_projection=output_projection,
+                                                            feed_previous=do_decode)
+            else:
+                # Create the internal multi-layer cell for our RNN.
+                single_cell = None
+                if cell_type == "GRU":
+                    single_cell = tf.nn.rnn_cell.GRUCell(size)
+                else:
+                    single_cell = tf.nn.rnn_cell.BasicLSTMCell(size)
+
+                cell = single_cell
+                if num_layers > 1:
+                    cell = tf.nn.rnn_cell.MultiRNNCell([single_cell] * num_layers)
+                return my_seq2seq.embedding_attention_seq2seq(
+                    encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
+                    num_encoder_symbols=source_vocab_size,
+                    num_decoder_symbols=target_vocab_size,
+                    embedding_size=size,
+                    output_projection=output_projection,
+                    feed_previous=do_decode)
 
         # Feeds for inputs.
         self.encoder_inputs = []
