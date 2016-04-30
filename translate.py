@@ -14,6 +14,7 @@ See the following papers for more information on neural translation models.
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+import functools
 
 import math
 import os
@@ -132,6 +133,11 @@ def train():
 
         print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
         model = create_model(sess, False, max_length)
+
+        num_params = functools.reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
+        print("Num params: %d" % num_params)
+        print("Num params (without embeddings): %d" % (num_params - (FLAGS.en_vocab_size+ FLAGS.fr_vocab_size) * FLAGS.size))
+
 
         # This is the training loop.
         step_time, loss = 0.0, 0.0
