@@ -665,7 +665,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
         batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
         attn_length = math_ops.reduce_max(attention_length)
         attn_size = attention_states.get_shape()[2].value
-        attention_states = tf.slice(attention_states, [0,0,0], tf.pack([-1, attn_length, cell.output_size]))
+        attention_states = tf.slice(attention_states, [0,0,0], tf.pack([-1, attn_length, -1]))
         # To calculate W1 * h_t we use a 1-by-1 convolution, need to reshape before.
         hidden = array_ops.reshape(attention_states, tf.pack([-1, attn_length, 1, attn_size]))
         hidden_features = []

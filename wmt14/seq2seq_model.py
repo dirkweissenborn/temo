@@ -78,15 +78,15 @@ class Seq2SeqModel(object):
         self.global_step = tf.Variable(0, trainable=False)
 
         # If we use sampled softmax, we need an output projection.
-        output_projection = None
         softmax_loss_function = None
         # Sampled softmax only makes sense if we sample less than vocabulary size.
-        if num_samples > 0 and num_samples < self.target_vocab_size:
-            w = tf.get_variable("proj_w", [size, self.target_vocab_size])
-            w_t = tf.transpose(w)
-            b = tf.get_variable("proj_b", [self.target_vocab_size])
-            output_projection = (w, b)
+        w = tf.get_variable("proj_w", [size, self.target_vocab_size])
 
+        b = tf.get_variable("proj_b", [self.target_vocab_size])
+        output_projection = (w, b)
+
+        if num_samples > 0 and num_samples < self.target_vocab_size:
+            w_t = tf.transpose(w)
             def sampled_loss(inputs, labels):
                 labels = tf.reshape(labels, [-1, 1])
                 return tf.nn.sampled_softmax_loss(w_t, b, inputs, labels, num_samples,
@@ -116,7 +116,8 @@ class Seq2SeqModel(object):
 
                     target_cell = tf.nn.rnn_cell.MultiRNNCell([target_cell, GRUCell(size, target_cell.output_size)])
                     return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, target_cell,
-                                                            target_vocab_size, size, output_projection=output_projection,
+                                                            target_vocab_size, size,
+                                                            output_projection=output_projection,
                                                             feed_previous=do_decode)
             else:
                 # Create the internal multi-layer cell for our RNN.
@@ -154,12 +155,8 @@ class Seq2SeqModel(object):
                    for i in range(len(self.decoder_inputs) - 1)]
 
         # Training outputs and losses.
-        if forward_only:
-            self.outputs, _ = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
-                                        self.encoder_length, self.decoder_length, True)
-        else:
-            self.outputs, _ = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
-                                        self.encoder_length, self.decoder_length, False)
+        self.outputs, _ = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
+                                    self.encoder_length, self.decoder_length, forward_only)
 
         self.loss = my_seq2seq.sequence_loss(self.outputs[:-1], targets, self.decoder_length,
                                 softmax_loss_function=softmax_loss_function)
@@ -169,8 +166,7 @@ class Seq2SeqModel(object):
         if not forward_only:
             opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.0)
             gradients = tf.gradients(self.loss, params)
-            clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients,
-                                                                            max_gradient_norm)
+            clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
             self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
         self.saver = tf.train.Saver(tf.all_variables())
 
