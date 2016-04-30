@@ -49,7 +49,7 @@ class Seq2SeqModel(object):
     def __init__(self, source_vocab_size, target_vocab_size, max_length, size,
                  num_layers, max_gradient_norm, batch_size, learning_rate,
                  learning_rate_decay_factor, cell_type="GRU",
-                 num_samples=512, forward_only=False):
+                 num_samples=-1, forward_only=False):
         """Create the model.
 
         Args:
@@ -107,14 +107,14 @@ class Seq2SeqModel(object):
                         source_out, c = my_seq2seq.my_rnn(source_cell, encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
                         source_out = [tf.reshape(o, [-1, size]) for o in source_out]
                     with tf.variable_scope("rnn"):
-                        _, final_source_state = my_seq2seq.my_rnn(GRUCell(source_cell.output_size, source_cell.output_size),
+                        _, final_source_state = my_seq2seq.my_rnn(GRUCell(size, source_cell.output_size),
                                                                   source_out, sequence_length=encoder_length, dtype=tf.float32)
 
                 with tf.variable_scope("target"):
                     rest_state = tf.zeros([batch_size, target_cell.state_size - source_cell.state_size + source_cell.output_size], tf.float32)
                     c = tf.concat(1, [rest_state, tf.slice(c, [0, source_cell.output_size], [-1, -1]), final_source_state])
 
-                    target_cell = tf.nn.rnn_cell.MultiRNNCell([target_cell, GRUCell(source_cell.output_size, source_cell.output_size)])
+                    target_cell = tf.nn.rnn_cell.MultiRNNCell([target_cell, GRUCell(size, target_cell.output_size)])
                     return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, target_cell,
                                                             target_vocab_size, size, output_projection=output_projection,
                                                             feed_previous=do_decode)
@@ -170,7 +170,7 @@ class Seq2SeqModel(object):
             opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.0)
             gradients = tf.gradients(self.loss, params)
             clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients,
-                                                             max_gradient_norm)
+                                                                            max_gradient_norm)
             self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
         self.saver = tf.train.Saver(tf.all_variables())
 
