@@ -36,8 +36,8 @@ tf.app.flags.DEFINE_float("max_gradient_norm", 5.0,
 tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("size", 512, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("num_layers", 1, "Number of layers in the model.")
-tf.app.flags.DEFINE_integer("en_vocab_size", 40000, "English vocabulary size.")
-tf.app.flags.DEFINE_integer("fr_vocab_size", 40000, "French vocabulary size.")
+tf.app.flags.DEFINE_integer("en_vocab_size", 15000, "English vocabulary size.")
+tf.app.flags.DEFINE_integer("fr_vocab_size", 15000, "French vocabulary size.")
 tf.app.flags.DEFINE_string("data_dir", "/tmp", "Data directory")
 tf.app.flags.DEFINE_string("train_dir", "/tmp", "Training directory.")
 tf.app.flags.DEFINE_integer("max_train_data_size", 0,
@@ -49,7 +49,7 @@ tf.app.flags.DEFINE_boolean("decode", False,
                             "Set to True for interactive decoding.")
 tf.app.flags.DEFINE_boolean("self_test", False,
                             "Run a self-test if this is set to True.")
-
+tf.app.flags.DEFINE_boolean("device", "/cpu:0", "Run on device.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -124,8 +124,9 @@ def train():
         max_length = max(l, max_length)
         train_total_size = len(train_set)
 
-        print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
-        model = create_model(sess, False, max_length)
+        with tf.device(FLAGS.device):
+            print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
+            model = create_model(sess, False, max_length)
 
         # This is the training loop.
         step_time, loss = 0.0, 0.0
@@ -167,7 +168,8 @@ def train():
 def decode():
     with tf.Session() as sess:
         # Create model and load parameters.
-        model = create_model(sess, True, FLAGS.max_length)
+        with tf.device(FLAGS.device):
+            model = create_model(sess, True, FLAGS.max_length)
         model.batch_size = 1  # We decode one sentence at a time.
 
         # Load vocabularies.

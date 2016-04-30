@@ -596,7 +596,7 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, d
         return outputs_and_state[:-1], outputs_and_state[-1]
 
 
-def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_states, cell,
+def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_states, attention_length, cell,
                       output_size=None, num_heads=1, loop_function=None,
                       dtype=dtypes.float32, scope=None,
                       initial_state_attention=False):
@@ -655,35 +655,36 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
         raise ValueError("Must provide at least 1 input to attention decoder.")
     if num_heads < 1:
         raise ValueError("With less than 1 heads, use a non-attention decoder.")
-    if not attention_states.get_shape()[1:2].is_fully_defined():
-        raise ValueError("Shape[1] and [2] of attention_states must be known: %s"
-                         % attention_states.get_shape())
+   # if not attention_states.get_shape()[1:2].is_fully_defined():
+   #    raise ValueError("Shape[1] and [2] of attention_states must be known: %s"
+                        # % attention_states.get_shape())
     if output_size is None:
         output_size = cell.output_size
 
     with variable_scope.variable_scope(scope or "attention_decoder"):
         batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
-        attn_length = attention_states.get_shape()[1].value
+        attn_length = math_ops.reduce_max(attention_length)
         attn_size = attention_states.get_shape()[2].value
-
+        attention_states = tf.slice(attention_states, [0,0,0], tf.pack([-1, attn_length, cell.output_size]))
         # To calculate W1 * h_t we use a 1-by-1 convolution, need to reshape before.
-        hidden = array_ops.reshape(
-            attention_states, [-1, attn_length, 1, attn_size])
+        hidden = array_ops.reshape(attention_states, tf.pack([-1, attn_length, 1, attn_size]))
         hidden_features = []
         v = []
         attention_vec_size = attn_size  # Size of query vectors for attention.
         for a in xrange(num_heads):
-            k = variable_scope.get_variable("AttnW_%d" % a,
-                                            [1, 1, attn_size, attention_vec_size])
+            k = variable_scope.get_variable("AttnW_%d" % a, [1, 1, attn_size, attention_vec_size])
             hidden_features.append(nn_ops.conv2d(hidden, k, [1, 1, 1, 1], "SAME"))
-            v.append(variable_scope.get_variable("AttnV_%d" % a,
-                                                 [attention_vec_size]))
+            v.append(variable_scope.get_variable("AttnV_%d" % a, [attention_vec_size]))
 
         state = initial_state
 
         def attention(query):
             """Put attention masks on hidden using hidden_features and query."""
             ds = []  # Results of attention reads will be stored here.
+            mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(attn_length, tf.float32), attn_length), [1, -1]),
+                           tf.pack([batch_size, 1]))
+            lengths = tf.tile(tf.reshape(tf.cast(attention_length, tf.float32), [-1, 1]), tf.pack([1, attn_length]))
+            mask = tf.cast(tf.greater(mask, lengths), tf.float32) * -1000.0
             for a in xrange(num_heads):
                 with variable_scope.variable_scope("Attention_%d" % a):
                     y = rnn_cell.linear(query, attention_vec_size, True)
@@ -691,10 +692,10 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
                     # Attention mask is a softmax of v^T * tanh(...).
                     s = math_ops.reduce_sum(
                         v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
-                    a = nn_ops.softmax(s)
+                    a = nn_ops.softmax(s + mask)
                     # Now calculate the attention-weighted vector d.
                     d = math_ops.reduce_sum(
-                        array_ops.reshape(a, [-1, attn_length, 1, 1]) * hidden,
+                        array_ops.reshape(a, tf.pack([-1, attn_length, 1, 1])) * hidden,
                         [1, 2])
                     ds.append(array_ops.reshape(d, [-1, attn_size]))
             return ds
@@ -754,7 +755,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
     return outputs, state
 
 
-def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, attention_states,
+def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, attention_states, attention_length,
                                 cell, num_symbols, embedding_size, num_heads=1,
                                 output_size=None, output_projection=None,
                                 feed_previous=False,
@@ -821,7 +822,7 @@ def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, a
         emb_inp = [
             embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
         return attention_decoder(
-            emb_inp, decoder_length, initial_state, attention_states, cell, output_size=output_size,
+            emb_inp, decoder_length, initial_state, attention_states, attention_length, cell, output_size=output_size,
             num_heads=num_heads, loop_function=loop_function,
             initial_state_attention=initial_state_attention)
 
@@ -894,7 +895,7 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, 
 
         if isinstance(feed_previous, bool):
             return embedding_attention_decoder(
-                decoder_inputs, decoder_length, encoder_state, attention_states, cell,
+                decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, cell,
                 num_decoder_symbols, embedding_size, num_heads=num_heads,
                 output_size=output_size, output_projection=output_projection,
                 feed_previous=feed_previous,
@@ -906,7 +907,7 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, 
             with variable_scope.variable_scope(variable_scope.get_variable_scope(),
                                                reuse=reuse):
                 outputs, state = embedding_attention_decoder(
-                    decoder_inputs, decoder_length, encoder_state, attention_states, cell,
+                    decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, cell,
                     num_decoder_symbols, embedding_size, num_heads=num_heads,
                     output_size=output_size, output_projection=output_projection,
                     feed_previous=feed_previous_bool,
