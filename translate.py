@@ -135,7 +135,9 @@ def train():
 
         num_params = functools.reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
         print("Num params: %d" % num_params)
-        print("Num params (without embeddings): %d" % (num_params - 2*(FLAGS.en_vocab_size+ FLAGS.fr_vocab_size) * (FLAGS.size+1)))
+        print("Num params (without embeddings): %d" % (num_params -
+                                                       (FLAGS.en_vocab_size + 2*FLAGS.fr_vocab_size) * FLAGS.size +
+                                                        FLAGS.fr_vocab_size))
 
 
         # This is the training loop.
