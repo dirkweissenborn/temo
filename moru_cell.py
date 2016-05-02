@@ -185,7 +185,7 @@ class AssociativeGRUCell(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
-    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=1, share=False, rng=None):
+    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=0, share=False, rng=None):
         AssociativeGRUCell.__init__(self, num_units, num_copies=num_copies, input_size=input_size,
                                     num_read_keys=num_read_keys, read_only=False, rng=rng)
         self._share = share
