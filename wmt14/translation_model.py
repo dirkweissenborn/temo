@@ -173,7 +173,7 @@ class TranslationModel(object):
                 for g, p in zip(gradients, params):
                     if g is None:
                         print("Gradient for %s is None." % p.name)
-                gradients = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradients]
+                #gradients = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradients]
                 clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
                 self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
             self.saver = tf.train.Saver(tf.all_variables())
