@@ -80,10 +80,9 @@ class TranslationModel(object):
 
         with tf.variable_scope("translation", initializer=initializer):
             # If we use sampled softmax, we need an output projection.
-            softmax_loss_function = nn_ops.sparse_softmax_cross_entropy_with_logits
+            softmax_loss_function = None
             # Sampled softmax only makes sense if we sample less than vocabulary size.
             w = tf.get_variable("proj_w", [size, self.target_vocab_size])
-
             b = tf.get_variable("proj_b", [self.target_vocab_size])
             output_projection = (w, b)
 
@@ -94,9 +93,13 @@ class TranslationModel(object):
                     return tf.nn.sampled_softmax_loss(w_t, b, inputs, labels, num_samples,
                                                           self.target_vocab_size)
                 softmax_loss_function = sampled_loss
+            else:
+                def loss_function(output, target):
+                    logit = nn_ops.xw_plus_b(output, w, b)
+                    return tf.minimum(tf.nn.sparse_softmax_cross_entropy_with_logits(logit, target), 10)
+                softmax_loss_function = loss_function
 
-            def loss_function(logit, target):
-                return tf.minimum(softmax_loss_function(logit, target), 10)
+
 
             # The seq2seq function: we use embedding for the input and attention.
             def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
@@ -163,7 +166,7 @@ class TranslationModel(object):
                                         self.encoder_length, self.decoder_length, forward_only)
 
             self.loss = my_seq2seq.sequence_loss(self.outputs[:-1], targets, self.decoder_length,
-                                                 softmax_loss_function=loss_function)
+                                                 softmax_loss_function=softmax_loss_function)
 
             # Gradients and SGD update operation for training the model.
             params = tf.trainable_variables()
