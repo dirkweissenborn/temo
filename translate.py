@@ -26,7 +26,7 @@ import numpy as np
 import tensorflow as tf
 
 from wmt14 import data_utils
-from wmt14 import seq2seq_model
+from wmt14 import translation_model
 
 
 tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
@@ -82,7 +82,7 @@ def read_data(source_path, target_path, max_length, max_size=None):
                 source_ids = [int(x) for x in source.split()]
                 target_ids = [int(x) for x in target.split()]
                 target_ids.append(data_utils.EOS_ID)
-                if len(source_ids) < max_length and len(target_ids) < max_length:
+                if source_ids and target_ids and len(source_ids) < max_length and len(target_ids) < max_length:
                     counter += 1
                     if counter % 100000 == 0:
                         print("  reading data line %d" % counter)
@@ -98,7 +98,7 @@ def read_data(source_path, target_path, max_length, max_size=None):
 def create_model(session, forward_only, max_length):
     """Create translation model and initialize or load parameters in session."""
     with tf.device(FLAGS.device):
-        model = seq2seq_model.Seq2SeqModel(
+        model = translation_model.TranslationModel(
             FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
             FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
             FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
@@ -123,13 +123,12 @@ def train():
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
                                           gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.8))) as sess:
         # Read data.
-        print ("Reading development and training data (limit: %d)."
+        print("Reading development and training data (limit: %d)."
                % FLAGS.max_train_data_size)
         dev_set, max_length = read_data(en_dev, fr_dev, FLAGS.max_length)
         train_set, l = read_data(en_train, fr_train, FLAGS.max_length, FLAGS.max_train_data_size)
         max_length = max(l, max_length)
         train_total_size = len(train_set)
-
 
         print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
         model = create_model(sess, False, max_length)
@@ -140,16 +139,17 @@ def train():
 
 
         # This is the training loop.
-        step_time, loss = 0.0, 0.0
+        step_time, loss, norm = 0.0, 0.0, 0.0
         current_step = 0
         previous_losses = []
         while True:
             # Get a batch and make a step.
             start_time = time.time()
             encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(train_set)
-            _, step_loss, _ = model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
+            step_norm, step_loss, _ = model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
             step_time += (time.time() - start_time) / FLAGS.steps_per_checkpoint
             loss += step_loss / FLAGS.steps_per_checkpoint
+            norm += step_norm / FLAGS.steps_per_checkpoint
             current_step += 1
 
             # Once in a while, we save checkpoint, print statistics, and run evals.
@@ -157,8 +157,8 @@ def train():
                 # Print statistics for the previous epoch.
                 perplexity = math.exp(loss) if loss < 300 else float('inf')
                 print ("global step %d learning rate %.4f step-time %.2f perplexity "
-                       "%.2f" % (model.global_step.eval(), model.learning_rate.eval(),
-                                 step_time, perplexity))
+                       "%.2f norm %.2f" % (model.global_step.eval(), model.learning_rate.eval(),
+                                 step_time, perplexity, norm))
                 # Decrease learning rate if no improvement was seen over last 3 times.
                 if len(previous_losses) > 2 and loss > max(previous_losses[-3:]):
                     sess.run(model.learning_rate_decay_op)
@@ -179,8 +179,8 @@ def train():
 def decode():
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         # Create model and load parameters.
+        FLAGS.batch_size = 1
         model = create_model(sess, True, FLAGS.max_length)
-        model.batch_size = 1  # We decode one sentence at a time.
 
         # Load vocabularies.
         en_vocab_path = os.path.join(FLAGS.data_dir,
@@ -198,7 +198,7 @@ def decode():
             # Get token-ids for the input sentence.
             token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), en_vocab)
             # Get a 1-element batch to feed the sentence to the model.
-            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [])])
+            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [data_utils.PAD_ID] * len(token_ids)*2)])
             # Get output logits for the sentence.
             _, _, output_logits = model.step(sess, encoder_inputs, decoder_inputs,
                                              encoder_length, decoder_length, True)
@@ -220,8 +220,8 @@ def self_test():
         print("Self-test for neural translation model.")
         # Create model with vocabularies of 10, 2 layers of 32.
         with tf.device(FLAGS.device):
-            model = seq2seq_model.Seq2SeqModel(10, 10, 6, 32, 2,
-                                               5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
+            model = translation_model.TranslationModel(10, 10, 6, 32, 2,
+                                                       5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
         sess.run(tf.initialize_all_variables())
 
         # Fake data set for both the (3, 3) and (6, 6) bucket.

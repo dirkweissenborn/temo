@@ -241,9 +241,19 @@ def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer
         (5) path to the English vocabulary file,
         (6) path to the French vocabulary file.
     """
-    # Get wmt data to the specified directory.
-    train_path = get_wmt_enfr_train_set(data_dir)
-    dev_path, test_path = get_wmt_enfr_dev_test_set(data_dir)
+    train_path = os.path.join(data_dir, "train")
+    dev_name = "ntst1213"
+    test_name = "ntst14"
+    dev_path = os.path.join(data_dir, dev_name)
+    test_path = os.path.join(data_dir, test_name)
+
+    fr_train_ids_path = train_path + (".ids%d.fr" % fr_vocabulary_size)
+    en_train_ids_path = train_path + (".ids%d.en" % en_vocabulary_size)
+
+    if not gfile.Exists(en_train_ids_path):
+        # Get wmt data to the specified directory.
+        get_wmt_enfr_train_set(data_dir)
+        dev_path, test_path = get_wmt_enfr_dev_test_set(data_dir)
 
     # Create vocabularies of the appropriate sizes.
     fr_vocab_path = os.path.join(data_dir, "vocab%d.fr" % fr_vocabulary_size)
@@ -252,8 +262,7 @@ def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer
     create_vocabulary(en_vocab_path, train_path + ".en", en_vocabulary_size, tokenizer)
 
     # Create token ids for the training data.
-    fr_train_ids_path = train_path + (".ids%d.fr" % fr_vocabulary_size)
-    en_train_ids_path = train_path + (".ids%d.en" % en_vocabulary_size)
+
     data_to_token_ids(train_path + ".fr", fr_train_ids_path, fr_vocab_path, tokenizer)
     data_to_token_ids(train_path + ".en", en_train_ids_path, en_vocab_path, tokenizer)
 

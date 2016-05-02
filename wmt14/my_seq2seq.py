@@ -693,6 +693,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
                     s = math_ops.reduce_sum(
                         v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
                     a = nn_ops.softmax(s + mask)
+                    #a = tf.Print(a, [a, mask, attention_length], "Attention Weights")
                     # Now calculate the attention-weighted vector d.
                     d = math_ops.reduce_sum(
                         array_ops.reshape(a, tf.pack([-1, attn_length, 1, 1])) * hidden,
