@@ -48,7 +48,7 @@ class TranslationModel(object):
 
     def __init__(self, source_vocab_size, target_vocab_size, max_length, size,
                  num_layers, max_gradient_norm, batch_size, learning_rate,
-                 learning_rate_decay_factor, cell_type="GRU",
+                 learning_rate_decay_factor, cell_type="GRU", attention=False,
                  num_samples=-1, forward_only=False):
         """Create the model.
 
@@ -68,6 +68,7 @@ class TranslationModel(object):
           num_samples: number of samples for sampled softmax.
           forward_only: if set, we do not construct the backward pass in the model.
         """
+        self._rng = random.Random(123)
         self.source_vocab_size = source_vocab_size
         self.target_vocab_size = target_vocab_size
         self.max_length = max_length
@@ -103,47 +104,71 @@ class TranslationModel(object):
 
             # The seq2seq function: we use embedding for the input and attention.
             def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
+                enc_cell, dec_cell = None, None
                 if cell_type == "AssociativeGRU":
-                    source_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
-                    target_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, share=False, rng=random.Random(123))
+                    print("Use AssociativeGRU!")
+                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
+                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, share=False, rng=random.Random(123))
 
-                    print("Use AssociativeGRU")
-                    with tf.variable_scope("source"):
-                        with tf.variable_scope("rnn"):
-                            source_out, final_source_state = my_seq2seq.my_rnn(EmbeddingWrapper(GRUCell(size, size), source_vocab_size, size),
-                                                                      encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
+                    final_enc_state = None
+                    if num_layers > 1:
+                        lower_cell = GRUCell(size, size)
+                        if num_layers > 2:
+                            lower_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell] * (num_layers-1))
+                        with tf.variable_scope("encoder"):
+                            encoder_inputs, final_enc_state = my_seq2seq.my_rnn(EmbeddingWrapper(lower_cell, source_vocab_size, size),
+                                                                                   encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
+                            encoder_inputs = [tf.reshape(o, [-1, size]) for o in encoder_inputs]
+                    else:
+                        enc_cell = EmbeddingWrapper(enc_cell, source_vocab_size, size)
 
-                        with tf.variable_scope("assoc"):
-                            source_out = [tf.reshape(o, [-1, size]) for o in source_out]
-                            source_out, c = my_seq2seq.my_rnn(source_cell, source_out, sequence_length=encoder_length, dtype=tf.float32)
+                    with tf.variable_scope("encoder_top"):
+                        encoder_outputs, c = my_seq2seq.my_rnn(enc_cell, encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
 
-                    with tf.variable_scope("target"):
-                        rest_state = tf.zeros([batch_size, target_cell.state_size - source_cell.state_size + source_cell.output_size], tf.float32)
-                        c = tf.concat(1, [final_source_state, rest_state, tf.slice(c, [0, source_cell.output_size], [-1, -1])])
+                    if dec_cell.state_size > enc_cell.state_size:
+                        rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
+                        if num_layers > 1:
+                            c = tf.concat(1, [final_enc_state, rest_state, c])
+                        else:
+                            c = tf.concat(1, [rest_state, c])
+                    elif num_layers > 1:
+                        c = tf.concat(1, [final_enc_state, c])
 
-                        target_cell = tf.nn.rnn_cell.MultiRNNCell([GRUCell(size, size), target_cell])
-                        return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, target_cell,
-                                                                target_vocab_size, size,
+                    if num_layers > 1:
+                        dec_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell, dec_cell])
+                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
+                                                            target_vocab_size, size,
+                                                            output_projection=output_projection,
+                                                            feed_previous=do_decode)
+                else:
+                    cell = None
+                    if cell_type == "LSTM":
+                        cell = BasicLSTMCell(size,size)
+                    else:
+                        cell = GRUCell(size, size)
+                    if num_layers > 1:
+                        cell = tf.nn.rnn_cell.MultiRNNCell([cell] * num_layers)
+                    if attention:
+                        print("Use attention!")
+                        dec_cell = None
+                        if cell_type == "LSTM":
+                            dec_cell = BasicLSTMCell(size,input_size=2*size)
+                        else:
+                            dec_cell = GRUCell(size, 2*size)
+                        if num_layers > 1:
+                            dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] + [cell] * num_layers)
+                        return my_seq2seq.embedding_attention_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
+                                                                      cell, dec_cell, source_vocab_size, target_vocab_size, size,
+                                                                      output_projection=output_projection,
+                                                                      feed_previous=do_decode)
+                    else:
+                        return my_seq2seq.embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
+                                                                cell, source_vocab_size, target_vocab_size, size,
                                                                 output_projection=output_projection,
                                                                 feed_previous=do_decode)
-                else:
-                    # Create the internal multi-layer cell for our RNN.
-                    single_cell = None
-                    if cell_type == "GRU":
-                        single_cell = tf.nn.rnn_cell.GRUCell(size)
-                    else:
-                        single_cell = tf.nn.rnn_cell.BasicLSTMCell(size)
 
-                    cell = single_cell
-                    if num_layers > 1:
-                        cell = tf.nn.rnn_cell.MultiRNNCell([single_cell] * num_layers)
-                    return my_seq2seq.embedding_attention_seq2seq(
-                        encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
-                        num_encoder_symbols=source_vocab_size,
-                        num_decoder_symbols=target_vocab_size,
-                        embedding_size=size,
-                        output_projection=output_projection,
-                        feed_previous=do_decode)
+
+
 
             # Feeds for inputs.
             self.encoder_inputs = []
@@ -176,7 +201,7 @@ class TranslationModel(object):
                 for g, p in zip(gradients, params):
                     if g is None:
                         print("Gradient for %s is None." % p.name)
-                #gradients = [tf.clip_by_value(g, -1.0, 1.0) if g is not None else g for g in gradients]
+               # gradients = [tf.clip_by_value(g, -5.0, 5.0) if g is not None else g for g in gradients]
                 clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
                 self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
             self.saver = tf.train.Saver(tf.all_variables())
@@ -253,7 +278,7 @@ class TranslationModel(object):
         # Get a random batch of encoder and decoder inputs from data,
         # pad them if needed, reverse encoder inputs and add GO to decoder.
         for _ in range(self.batch_size):
-            encoder_input, decoder_input = random.choice(data)
+            encoder_input, decoder_input = self._rng.choice(data)
             encoder_size = len(encoder_input)
             decoder_size = len(decoder_input)
             encoder_lengths.append(encoder_size)

@@ -661,6 +661,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
     if output_size is None:
         output_size = cell.output_size
 
+
     with variable_scope.variable_scope(scope or "attention_decoder"):
         batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
         attn_length = math_ops.reduce_max(attention_length)
@@ -683,7 +684,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             ds = []  # Results of attention reads will be stored here.
             mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(attn_length, tf.float32), attn_length), [1, -1]),
                            tf.pack([batch_size, 1]))
-            lengths = tf.tile(tf.reshape(tf.cast(attention_length, tf.float32), [-1, 1]), tf.pack([1, attn_length]))
+            lengths = tf.tile(tf.expand_dims(tf.cast(attention_length, tf.float32), 1), tf.pack([1, attn_length]))
             mask = tf.cast(tf.greater(mask, lengths), tf.float32) * -1000.0
             for a in xrange(num_heads):
                 with variable_scope.variable_scope("Attention_%d" % a):
@@ -729,7 +730,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             # pylint: disable=cell-var-from-loop
             def call_cell():
                 # Merge input and previous attentions into one vector of the right size.
-                x = rnn_cell.linear([inp] + HACK[0], cell.input_size, True)
+                x = tf.concat(1, [inp] + HACK[0])
                 cell_output, cell_state = cell(x, state)
                 # Run the attention mechanism.
                 if time == 0 and initial_state_attention:
@@ -828,7 +829,7 @@ def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, a
             initial_state_attention=initial_state_attention)
 
 
-def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
+def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_length, enc_cell, dec_cell,
                                 num_encoder_symbols, num_decoder_symbols,
                                 embedding_size,
                                 num_heads=1, output_projection=None,
@@ -878,25 +879,25 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, 
     with variable_scope.variable_scope(scope or "embedding_attention_seq2seq"):
         # Encoder.
         encoder_cell = rnn_cell.EmbeddingWrapper(
-            cell, embedding_classes=num_encoder_symbols,
+            enc_cell, embedding_classes=num_encoder_symbols,
             embedding_size=embedding_size)
         encoder_outputs, encoder_state = my_rnn(
             encoder_cell, encoder_inputs, dtype=dtype, sequence_length=encoder_length)
 
         # First calculate a concatenation of encoder outputs to put attention on.
-        top_states = [array_ops.reshape(e, [-1, 1, cell.output_size])
+        top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
                       for e in encoder_outputs]
         attention_states = array_ops.concat(1, top_states)
 
         # Decoder.
         output_size = None
         if output_projection is None:
-            cell = rnn_cell.OutputProjectionWrapper(cell, num_decoder_symbols)
+            cell = rnn_cell.OutputProjectionWrapper(dec_cell, num_decoder_symbols)
             output_size = num_decoder_symbols
 
         if isinstance(feed_previous, bool):
             return embedding_attention_decoder(
-                decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, cell,
+                decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, dec_cell,
                 num_decoder_symbols, embedding_size, num_heads=num_heads,
                 output_size=output_size, output_projection=output_projection,
                 feed_previous=feed_previous,

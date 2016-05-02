@@ -47,10 +47,9 @@ tf.app.flags.DEFINE_integer("max_train_data_size", 0,
 tf.app.flags.DEFINE_integer("max_length", 50, "limit length of sentences.")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 200,
                             "How many training steps to do per checkpoint.")
-tf.app.flags.DEFINE_boolean("decode", False,
-                            "Set to True for interactive decoding.")
-tf.app.flags.DEFINE_boolean("self_test", False,
-                            "Run a self-test if this is set to True.")
+tf.app.flags.DEFINE_boolean("decode", False, "Set to True for interactive decoding.")
+tf.app.flags.DEFINE_boolean("self_test", False, "Run a self-test if this is set to True.")
+tf.app.flags.DEFINE_boolean("attention", False, "Use attention.")
 tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
 
 FLAGS = tf.app.flags.FLAGS
@@ -102,7 +101,7 @@ def create_model(session, forward_only, max_length):
             FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
             FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
             FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
-            forward_only=forward_only)
+            forward_only=forward_only, attention=FLAGS.attention)
     ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
     if ckpt and tf.gfile.Exists(ckpt.model_checkpoint_path):
         print("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -161,10 +160,6 @@ def train():
                 print ("global step %d learning rate %.4f step-time %.2f perplexity "
                        "%.2f norm %.2f" % (model.global_step.eval(), model.learning_rate.eval(),
                                  step_time, perplexity, norm))
-                # Decrease learning rate if no improvement was seen over last 3 times.
-                if len(previous_losses) > 2 and loss > max(previous_losses[-3:]):
-                    sess.run(model.learning_rate_decay_op)
-                previous_losses.append(loss)
                 # Save checkpoint and zero timer and loss.
                 checkpoint_path = os.path.join(FLAGS.train_dir, "translate.ckpt")
                 model.saver.save(sess, checkpoint_path, global_step=model.global_step)
@@ -174,6 +169,10 @@ def train():
                 _, eval_loss, _ = model.step(sess, encoder_inputs, decoder_inputs,
                                              encoder_length, decoder_length, True)
                 eval_ppx = math.exp(eval_loss) if eval_loss < 300 else float('inf')
+                # Decrease learning rate if no improvement was seen over last 3 times.
+                if len(previous_losses) > 2 and eval_loss > max(previous_losses[-3:]):
+                    sess.run(model.learning_rate_decay_op)
+                previous_losses.append(eval_loss)
                 print("  eval perplexity %.2f" % eval_ppx)
                 sys.stdout.flush()
 
@@ -223,7 +222,8 @@ def self_test():
         # Create model with vocabularies of 10, 2 layers of 32.
         with tf.device(FLAGS.device):
             model = translation_model.TranslationModel(10, 10, 6, 32, 2,
-                                                       5.0, 32, 0.3, 0.99, num_samples=8, cell_type=FLAGS.cell_type)
+                                                       5.0, 32, 0.3, 0.99, num_samples=8,
+                                                       cell_type=FLAGS.cell_type, attention=FLAGS.attention)
         sess.run(tf.initialize_all_variables())
 
         # Fake data set for both the (3, 3) and (6, 6) bucket.
