@@ -210,6 +210,8 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             read_mem = tf.slice(state, [0, self._num_units * (self._num_copies+1)], [-1, -1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
+                if self._share:
+                    tf.get_variable_scope().reuse_variables()
                 key = bound(complexify(linear([inputs, old_h], (1+self._num_read_keys)*self._num_units, False)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
