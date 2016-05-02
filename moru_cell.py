@@ -131,20 +131,20 @@ class AssociativeGRUCell(RNNCell):
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, old_h], (1+self._num_read_keys)*self._num_units, False)))
-                w_k_real, w_k_imag = _comp_real(key), _comp_imag(key)
-                r_keys = []
+                k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
-                    k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
-                    k = tf.concat(0, [k, tf.gather(k, perms)])
-                    w_k_real, w_k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
                     if self._num_read_keys > 0:
-                        k_real = tf.split(1, 1+self._num_read_keys, w_k_real)
-                        k_imag = tf.split(1, 1+self._num_read_keys, w_k_imag)
-                        w_k_real = k_real[0]
-                        w_k_imag = k_imag[0]
-                        r_k_real = k_real[1:]
-                        r_k_imag = k_imag[1:]
-                        r_keys = list(zip(r_k_real, r_k_imag))
+                        k = tf.transpose(tf.concat(0, tf.split(1, 1+self._num_read_keys, k[0]) + tf.split(1, 1+self._num_read_keys, k[1])), [1, 0])
+                    else:
+                        k = tf.transpose(tf.concat(0, k), [1, 0])
+                    k = tf.concat(0, [k, tf.gather(k, perms)])
+                    k = tf.split(0, 2*(1+self._num_read_keys), tf.transpose(k, [1, 0]))
+
+                w_k_real = k[0]
+                w_k_imag = k[1+self._num_read_keys]
+                r_k_real = k[1:1+self._num_read_keys]
+                r_k_imag = k[2+self._num_read_keys:]
+                r_keys = list(zip(r_k_real, r_k_imag))
                 w_key = (w_k_real, w_k_imag)
                 conj_w_key = _comp_conj(w_key)
 
@@ -185,7 +185,7 @@ class AssociativeGRUCell(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
-    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=0, share=False, rng=None):
+    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=1, share=False, rng=None):
         AssociativeGRUCell.__init__(self, num_units, num_copies=num_copies, input_size=input_size,
                                     num_read_keys=num_read_keys, read_only=False, rng=rng)
         self._share = share
@@ -211,20 +211,19 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs, old_h], (1+self._num_read_keys)*self._num_units, False)))
-                w_k_real, w_k_imag = _comp_real(key), _comp_imag(key)
-                r_keys = []
+                k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
-                    k = tf.transpose(tf.concat(0, [_comp_real(key), _comp_imag(key)]), [1, 0])
-                    k = tf.concat(0, [k, tf.gather(k, perms)])
-                    w_k_real, w_k_imag = tf.split(0, 2, tf.transpose(k, [1, 0]))
                     if self._num_read_keys > 0:
-                        k_real = tf.split(1, 1+self._num_read_keys, w_k_real)
-                        k_imag = tf.split(1, 1+self._num_read_keys, w_k_imag)
-                        w_k_real = k_real[0]
-                        w_k_imag = k_imag[0]
-                        r_k_real = k_real[1:]
-                        r_k_imag = k_imag[1:]
-                        r_keys = list(zip(r_k_real, r_k_imag))
+                        k = tf.transpose(tf.concat(0, tf.split(1, 1+self._num_read_keys, k[0]) + tf.split(1, 1+self._num_read_keys, k[1])), [1, 0])
+                    else:
+                        k = tf.transpose(tf.concat(0, k), [1, 0])
+                    k = tf.concat(0, [k, tf.gather(k, perms)])
+                    k = tf.split(0, 2*(1+self._num_read_keys), tf.transpose(k, [1, 0]))
+                w_k_real = k[0]
+                w_k_imag = k[1+self._num_read_keys]
+                r_k_real = k[1:1+self._num_read_keys]
+                r_k_imag = k[2+self._num_read_keys:]
+                r_keys = list(zip(r_k_real, r_k_imag))
                 w_key = (w_k_real, w_k_imag)
                 conj_w_key = _comp_conj(w_key)
 
