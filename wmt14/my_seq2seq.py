@@ -75,9 +75,10 @@ from tensorflow.python.ops import rnn_cell
 from tensorflow.python.ops import variable_scope
 import tensorflow as tf
 
+from wmt14 import data_utils
 
 def _extract_argmax_and_embed(embedding, output_projection=None,
-                              update_embedding=True):
+                              update_embedding=True,):
     """Get a loop_function that extracts the previous symbol and embeds it.
 
     Args:
@@ -90,7 +91,7 @@ def _extract_argmax_and_embed(embedding, output_projection=None,
     Returns:
       A loop function.
     """
-    def loop_function(prev, _):
+    def loop_function(state, prev, _):
         if output_projection is not None:
             prev = nn_ops.xw_plus_b(
                 prev, output_projection[0], output_projection[1])
@@ -100,8 +101,78 @@ def _extract_argmax_and_embed(embedding, output_projection=None,
         emb_prev = embedding_ops.embedding_lookup(embedding, prev_symbol)
         if not update_embedding:
             emb_prev = array_ops.stop_gradient(emb_prev)
-        return emb_prev
-    return loop_function
+        return state, emb_prev, prev_symbol
+    return loop_function, None
+
+# Only works for batch_size=1
+def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=None, update_embedding=True):
+    log_beam_probs, sequences, emit = [], [], []
+    def loop_function(state, prev, _):
+        if output_projection is not None:
+            prev = tf.nn.xw_plus_b(prev, output_projection[0], output_projection[1])
+        # Compute
+        #  log P(next_word, hypothesis) =
+        #  log P(next_word | hypothesis)*P(hypothesis) =
+        #  log P(next_word | hypothesis) + log P(hypothesis)
+        # for each hypothesis separately, then join them together
+        # on the same tensor dimension to form the example's
+        # beam probability distribution:
+        # [P(word1, hypothesis1), P(word2, hypothesis1), ...,
+        #  P(word1, hypothesis2), P(word2, hypothesis2), ...]
+
+        # If TF had a log_sum_exp operator, then it would be
+        # more numerically stable to use:
+        #   probs = prev - tf.log_sum_exp(prev, reduction_dims=[1])
+        probs = tf.log(tf.nn.softmax(prev))
+        # i == 1 corresponds to the input being "<GO>", with
+        # uniform prior probability and only the empty hypothesis
+        # (each row is a separate example).
+        if log_beam_probs:
+            probs = tf.reshape(probs + log_beam_probs[-1], [-1])
+
+        # Get the top `beam_size` candidates and reshape them such
+        # that the number of rows = batch_size * beam_size, which
+        # allows us to process each hypothesis independently.
+        best_probs, indices = tf.nn.top_k(probs, beam_size)
+        indices = tf.stop_gradient(tf.squeeze(tf.reshape(indices, [-1, 1])))
+        best_probs = tf.stop_gradient(tf.reshape(best_probs, [-1, 1]))
+
+        symbols = indices % num_symbols # Which word in vocabulary.
+        beam_parent = indices // num_symbols # Which hypothesis it came from.
+        log_beam_probs.append(best_probs)
+
+        emb_prev = tf.nn.embedding_lookup(embedding, symbols)
+
+        if sequences:
+            #beam_parent = tf.Print(beam_parent, [beam_parent, symbols], "beam_parent")
+            last_sequences = tf.gather(sequences[-1], beam_parent)
+            #last_sequences = tf.Print(last_sequences, [last_sequences], "")
+            last_sequences = tf.concat(1, [last_sequences, tf.reshape(symbols, [-1, 1])])
+            sequences.append(last_sequences)
+        else:
+            #symbols = tf.Print(symbols, [beam_parent, symbols], "beam_parent")
+            sequences.append(tf.reshape(symbols, [-1, 1]))
+
+        to_emit_idx = tf.squeeze(tf.where(tf.equal(symbols, data_utils.EOS_ID)), [1])
+        to_emit = tf.gather(sequences[-1], to_emit_idx)
+        emit_probs = tf.gather(best_probs, to_emit_idx)
+        emit.append(to_emit)
+        emit.append(tf.squeeze(emit_probs, [1]))
+
+        to_keep = tf.squeeze(tf.where(tf.not_equal(symbols, data_utils.EOS_ID)), [1])
+        sequences[-1] = tf.gather(sequences[-1], to_keep)
+        log_beam_probs[-1] = tf.gather(log_beam_probs[-1], to_keep)
+        new_state = tf.gather(tf.gather(state, beam_parent), to_keep)
+        emb_prev = tf.gather(emb_prev, to_keep)
+
+        state_size = state.get_shape()[1].value
+        size = embedding.get_shape()[1].value
+        new_state = tf.reshape(new_state, [-1, state_size])
+        emb_prev = tf.reshape(emb_prev, [-1, size])
+
+        return new_state, emb_prev
+
+    return loop_function, emit
 
 
 
@@ -247,20 +318,6 @@ def rnn_decoder(decoder_inputs, sequence_length, initial_state, cell, loop_funct
            states can be the same. They are different for LSTM cells though.)
     """
     with variable_scope.variable_scope(scope or "rnn_decoder") as varscope:
-        state = initial_state
-        outputs = []
-        prev = None
-        for i, inp in enumerate(decoder_inputs):
-            if loop_function is not None and prev is not None:
-                with variable_scope.variable_scope("loop_function", reuse=True):
-                    inp = loop_function(prev, i)
-            if i > 0:
-                variable_scope.get_variable_scope().reuse_variables()
-            output, state = cell(inp, state)
-            outputs.append(output)
-            if loop_function is not None:
-                prev = output
-
         outputs = []
         if varscope.caching_device is None:
             varscope.set_caching_device(lambda op: op.device)
@@ -295,7 +352,7 @@ def rnn_decoder(decoder_inputs, sequence_length, initial_state, cell, loop_funct
         for time, inp in enumerate(decoder_inputs):
             if loop_function is not None and prev is not None:
                 with variable_scope.variable_scope("loop_function", reuse=True):
-                    inp = loop_function(prev, inp)
+                    state, inp = loop_function(state, prev, inp)
             if time > 0: tf.get_variable_scope().reuse_variables()
             # pylint: disable=cell-var-from-loop
             call_cell = lambda: cell(inp, state)
@@ -376,7 +433,7 @@ def tied_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_len
 def embedding_rnn_decoder(decoder_inputs, decoder_length, initial_state, cell, num_symbols,
                           embedding_size, output_projection=None,
                           feed_previous=False,
-                          update_embedding_for_previous=True, scope=None):
+                          update_embedding_for_previous=True, beam_size=1, scope=None):
     """RNN decoder with embedding and a pure-decoding option.
 
     Args:
@@ -426,17 +483,19 @@ def embedding_rnn_decoder(decoder_inputs, decoder_length, initial_state, cell, n
         with ops.device("/cpu:0"):
             embedding = variable_scope.get_variable("embedding",
                                                     [num_symbols, embedding_size])
-        loop_function = _extract_argmax_and_embed(
+        loop_function, to_emit = _beamsearch_and_embed(beam_size, num_symbols,
             embedding, output_projection,
-            update_embedding_for_previous) if feed_previous else None
+            update_embedding_for_previous) if feed_previous else (None, None)
         emb_inp = [embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
-        return rnn_decoder(emb_inp, decoder_length, initial_state, cell,
-                           loop_function=loop_function)
+
+        out, state = rnn_decoder(emb_inp, decoder_length, initial_state, cell,
+                                 loop_function=loop_function)
+        return out, state, to_emit
 
 
 def embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
                           num_encoder_symbols, num_decoder_symbols,
-                          embedding_size, output_projection=None,
+                          embedding_size, output_projection=None, beam_size=1,
                           feed_previous=False, dtype=dtypes.float32,
                           scope=None):
     """Embedding RNN sequence-to-sequence model.
@@ -491,7 +550,7 @@ def embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decode
         if isinstance(feed_previous, bool):
             return embedding_rnn_decoder(
                 decoder_inputs, decoder_length, encoder_state, cell, num_decoder_symbols,
-                embedding_size, output_projection=output_projection,
+                embedding_size, output_projection=output_projection, beam_size=beam_size,
                 feed_previous=feed_previous)
 
         # If feed_previous is a Tensor, we construct 2 graphs and use cond.
@@ -499,22 +558,22 @@ def embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decode
             reuse = None if feed_previous_bool else True
             with variable_scope.variable_scope(variable_scope.get_variable_scope(),
                                                reuse=reuse):
-                outputs, state = embedding_rnn_decoder(
+                outputs, state, to_emit = embedding_rnn_decoder(
                     decoder_inputs, decoder_length, encoder_state, cell, num_decoder_symbols,
                     embedding_size, output_projection=output_projection,
-                    feed_previous=feed_previous_bool,
+                    feed_previous=feed_previous_bool, beam_size=beam_size,
                     update_embedding_for_previous=False)
-                return outputs + [state]
+                return outputs + [state], to_emit
 
-        outputs_and_state = control_flow_ops.cond(feed_previous,
-                                                  lambda: decoder(True),
-                                                  lambda: decoder(False))
-        return outputs_and_state[:-1], outputs_and_state[-1]
+        outputs_and_state, to_emit = control_flow_ops.cond(feed_previous,
+                                                             lambda: decoder(True),
+                                                             lambda: decoder(False))
+        return outputs_and_state[:-1], outputs_and_state[-1], to_emit
 
 
 def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_length, cell,
                                num_symbols, embedding_size,
-                               output_projection=None, feed_previous=False,
+                               output_projection=None, feed_previous=False, beam_size=1,
                                dtype=dtypes.float32, scope=None):
     """Embedding RNN sequence-to-sequence model with tied (shared) parameters.
 
@@ -573,27 +632,27 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, d
             cell = rnn_cell.OutputProjectionWrapper(cell, num_symbols)
 
         if isinstance(feed_previous, bool):
-            loop_function = _extract_argmax_and_embed(
-                embedding, output_projection, True) if feed_previous else None
+            loop_function, to_emit = _beamsearch_and_embed(beam_size, num_symbols,
+                embedding, output_projection, True) if feed_previous else (None, None)
             return tied_rnn_seq2seq(emb_encoder_inputs, emb_decoder_inputs, encoder_length, decoder_length, cell,
                                     loop_function=loop_function, dtype=dtype)
 
         # If feed_previous is a Tensor, we construct 2 graphs and use cond.
         def decoder(feed_previous_bool):
-            loop_function = _extract_argmax_and_embed(
-                embedding, output_projection, False) if feed_previous_bool else None
+            loop_function, to_emit = _beamsearch_and_embed(beam_size, num_symbols,
+                embedding, output_projection, False) if feed_previous_bool else (None, None)
             reuse = None if feed_previous_bool else True
             with variable_scope.variable_scope(variable_scope.get_variable_scope(),
                                                reuse=reuse):
                 outputs, state = tied_rnn_seq2seq(
                     emb_encoder_inputs, emb_decoder_inputs, encoder_length, decoder_length, cell,
                     loop_function=loop_function, dtype=dtype)
-                return outputs + [state]
+                return outputs + [state], to_emit
 
-        outputs_and_state = control_flow_ops.cond(feed_previous,
-                                                  lambda: decoder(True),
-                                                  lambda: decoder(False))
-        return outputs_and_state[:-1], outputs_and_state[-1]
+        outputs_and_state, to_emit = control_flow_ops.cond(feed_previous,
+                                                              lambda: decoder(True),
+                                                              lambda: decoder(False))
+        return outputs_and_state[:-1], outputs_and_state[-1], to_emit
 
 
 def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_states, attention_length, cell,
@@ -661,7 +720,6 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
     if output_size is None:
         output_size = cell.output_size
 
-
     with variable_scope.variable_scope(scope or "attention_decoder"):
         batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
         attn_length = math_ops.reduce_max(attention_length)
@@ -725,7 +783,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
         for time, inp in enumerate(decoder_inputs):
             if loop_function is not None and prev is not None:
                 with variable_scope.variable_scope("loop_function", reuse=True):
-                    inp = loop_function(prev, inp)
+                    state, inp = loop_function(state, prev, inp)
             if time > 0: tf.get_variable_scope().reuse_variables()
             # pylint: disable=cell-var-from-loop
             def call_cell():
@@ -761,7 +819,7 @@ def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, a
                                 cell, num_symbols, embedding_size, num_heads=1,
                                 output_size=None, output_projection=None,
                                 feed_previous=False,
-                                update_embedding_for_previous=True,
+                                update_embedding_for_previous=True, beam_size=1,
                                 dtype=dtypes.float32, scope=None,
                                 initial_state_attention=False):
     """RNN decoder with embedding and attention and a pure-decoding option.
@@ -818,20 +876,21 @@ def embedding_attention_decoder(decoder_inputs, decoder_length, initial_state, a
         with ops.device("/cpu:0"):
             embedding = variable_scope.get_variable("embedding",
                                                     [num_symbols, embedding_size])
-        loop_function = _extract_argmax_and_embed(
+        loop_function, to_emit = _beamsearch_and_embed(beam_size, num_symbols,
             embedding, output_projection,
-            update_embedding_for_previous) if feed_previous else None
-        emb_inp = [
-            embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
-        return attention_decoder(
+            update_embedding_for_previous) if feed_previous else (None, None)
+        emb_inp = [embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
+        out, state = attention_decoder(
             emb_inp, decoder_length, initial_state, attention_states, attention_length, cell, output_size=output_size,
             num_heads=num_heads, loop_function=loop_function,
             initial_state_attention=initial_state_attention)
 
+        return out, state, to_emit
+
 
 def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, decoder_length, enc_cell, dec_cell,
                                 num_encoder_symbols, num_decoder_symbols,
-                                embedding_size,
+                                embedding_size, beam_size=1,
                                 num_heads=1, output_projection=None,
                                 feed_previous=False, dtype=dtypes.float32,
                                 scope=None, initial_state_attention=False):
@@ -900,7 +959,7 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, 
                 decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, dec_cell,
                 num_decoder_symbols, embedding_size, num_heads=num_heads,
                 output_size=output_size, output_projection=output_projection,
-                feed_previous=feed_previous,
+                feed_previous=feed_previous, beam_size=beam_size,
                 initial_state_attention=initial_state_attention)
 
         # If feed_previous is a Tensor, we construct 2 graphs and use cond.
@@ -908,19 +967,19 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, encoder_length, 
             reuse = None if feed_previous_bool else True
             with variable_scope.variable_scope(variable_scope.get_variable_scope(),
                                                reuse=reuse):
-                outputs, state = embedding_attention_decoder(
+                outputs, state, to_emit = embedding_attention_decoder(
                     decoder_inputs, decoder_length, encoder_state, attention_states, encoder_length, cell,
                     num_decoder_symbols, embedding_size, num_heads=num_heads,
                     output_size=output_size, output_projection=output_projection,
-                    feed_previous=feed_previous_bool,
+                    feed_previous=feed_previous_bool, beam_size=beam_size,
                     update_embedding_for_previous=False,
                     initial_state_attention=initial_state_attention)
-                return outputs + [state]
+                return outputs + [state], to_emit
 
-        outputs_and_state = control_flow_ops.cond(feed_previous,
-                                                  lambda: decoder(True),
-                                                  lambda: decoder(False))
-        return outputs_and_state[:-1], outputs_and_state[-1]
+        outputs_and_state, to_emit = control_flow_ops.cond(feed_previous,
+                                                              lambda: decoder(True),
+                                                              lambda: decoder(False))
+        return outputs_and_state[:-1], outputs_and_state[-1], to_emit
 
 
 def sequence_loss_by_example(logits, targets, length,

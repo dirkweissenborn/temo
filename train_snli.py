@@ -164,7 +164,9 @@ def training(embeddings, FLAGS):
                     epochs += 1
                     shuffledA, shuffledB, y = shuffle(shuffledA, shuffledB, y, random_state=rng2.randint(0, 1000))
                     offset = 0
+                    sess.run(model["keep_prob"].assign(1.0))
                     acc = evaluate(devA, devB, y_scores[1])
+                    sess.run(model["keep_prob"].initializer)
                     print("\n%d epochs done! Accuracy on Dev: %.3f" % (epochs, acc))
                     if acc < epoch_acc + 1e-3:
                         print("Decaying learning-rate!")

@@ -80,29 +80,10 @@ class TranslationModel(object):
         initializer = tf.random_uniform_initializer(-0.05, 0.05)
 
         with tf.variable_scope("translation", initializer=initializer):
-            # If we use sampled softmax, we need an output projection.
-            softmax_loss_function = None
-            # Sampled softmax only makes sense if we sample less than vocabulary size.
             w = tf.get_variable("proj_w", [size, self.target_vocab_size])
             b = tf.get_variable("proj_b", [self.target_vocab_size])
             output_projection = (w, b)
 
-            if num_samples > 0 and num_samples < self.target_vocab_size:
-                w_t = tf.transpose(w)
-                def sampled_loss(inputs, labels):
-                    labels = tf.reshape(labels, [-1, 1])
-                    return tf.nn.sampled_softmax_loss(w_t, b, inputs, labels, num_samples,
-                                                          self.target_vocab_size)
-                softmax_loss_function = sampled_loss
-            else:
-                def loss_function(output, target):
-                    logit = nn_ops.xw_plus_b(output, w, b)
-                    return tf.minimum(tf.nn.sparse_softmax_cross_entropy_with_logits(logit, target), 10)
-                softmax_loss_function = loss_function
-
-
-
-            # The seq2seq function: we use embedding for the input and attention.
             def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
                 enc_cell, dec_cell = None, None
                 if cell_type == "AssociativeGRU":
@@ -138,7 +119,7 @@ class TranslationModel(object):
                         dec_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell, dec_cell])
                     return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
                                                             target_vocab_size, size,
-                                                            output_projection=output_projection,
+                                                            output_projection=output_projection, beam_size=5,
                                                             feed_previous=do_decode)
                 else:
                     cell = None
@@ -159,16 +140,13 @@ class TranslationModel(object):
                             dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] + [cell] * num_layers)
                         return my_seq2seq.embedding_attention_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
                                                                       cell, dec_cell, source_vocab_size, target_vocab_size, size,
-                                                                      output_projection=output_projection,
+                                                                      output_projection=output_projection, beam_size=5,
                                                                       feed_previous=do_decode)
                     else:
                         return my_seq2seq.embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
                                                                 cell, source_vocab_size, target_vocab_size, size,
-                                                                output_projection=output_projection,
+                                                                output_projection=output_projection, beam_size=5,
                                                                 feed_previous=do_decode)
-
-
-
 
             # Feeds for inputs.
             self.encoder_inputs = []
@@ -187,15 +165,17 @@ class TranslationModel(object):
                        for i in range(len(self.decoder_inputs) - 1)]
 
             # Training outputs and losses.
-            self.outputs, _ = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
-                                        self.encoder_length, self.decoder_length, forward_only)
-
-            self.loss = my_seq2seq.sequence_loss(self.outputs[:-1], targets, self.decoder_length,
-                                                 softmax_loss_function=softmax_loss_function)
+            rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
+                                                     self.encoder_length, self.decoder_length, forward_only)
+            self.outputs = [nn_ops.xw_plus_b(o, w, b) for o in rnn_outputs]
 
             # Gradients and SGD update operation for training the model.
             params = tf.trainable_variables()
             if not forward_only:
+                def loss(logit, target):
+                    return tf.minimum(tf.nn.sparse_softmax_cross_entropy_with_logits(logit, target), 10)
+                self.loss = my_seq2seq.sequence_loss(self.outputs[:-1], targets, self.decoder_length,
+                                                     softmax_loss_function=loss)
                 opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.0)
                 gradients = tf.gradients(self.loss, params)
                 for g, p in zip(gradients, params):
@@ -248,15 +228,16 @@ class TranslationModel(object):
                            self.gradient_norm,  # Gradient norm.
                            self.loss]  # Loss for this batch.
         else:
-            output_feed = [self.loss]  # Loss for this batch.
+            output_feed = []  # Loss for this batch.
             for l in range(decoder_size):  # Output logits.
                 output_feed.append(self.outputs[l])
+            output_feed = output_feed + self.decoded
 
         outputs = session.run(output_feed, input_feed)
         if not forward_only:
             return outputs[1], outputs[2], None  # Gradient norm, loss, no outputs.
         else:
-            return None, outputs[0], outputs[1:]  # No gradient norm, loss, outputs.
+            return outputs[:decoder_size], outputs[decoder_size:]  # loss, outputs, decoded symbols
 
     def get_batch(self, data):
         """Get a random batch of data from the specified bucket, prepare for step.

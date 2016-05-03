@@ -37,8 +37,8 @@ tf.app.flags.DEFINE_float("max_gradient_norm", 5.0,
 tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("size", 512, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("num_layers", 1, "Number of layers in the model.")
-tf.app.flags.DEFINE_integer("en_vocab_size", 15000, "English vocabulary size.")
-tf.app.flags.DEFINE_integer("fr_vocab_size", 15000, "French vocabulary size.")
+tf.app.flags.DEFINE_integer("en_vocab_size", 30000, "English vocabulary size.")
+tf.app.flags.DEFINE_integer("fr_vocab_size", 30000, "French vocabulary size.")
 tf.app.flags.DEFINE_string("data_dir", "/tmp", "Data directory")
 tf.app.flags.DEFINE_string("train_dir", "/tmp/wmt14", "Training directory.")
 tf.app.flags.DEFINE_string("cell_type", "GRU", "Type of cell to use.")
@@ -199,17 +199,19 @@ def decode():
             # Get token-ids for the input sentence.
             token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), en_vocab)
             # Get a 1-element batch to feed the sentence to the model.
-            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [data_utils.PAD_ID] * len(token_ids)*2)])
+            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
             # Get output logits for the sentence.
-            _, _, output_logits = model.step(sess, encoder_inputs, decoder_inputs,
-                                             encoder_length, decoder_length, True)
-            # This is a greedy decoder - outputs are just argmaxes of output_logits.
-            outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
-            # If there is an EOS symbol in outputs, cut them at that point.
-            if data_utils.EOS_ID in outputs:
-                outputs = outputs[:outputs.index(data_utils.EOS_ID)]
-            # Print out French sentence corresponding to outputs.
-            print(" ".join([tf.compat.as_str(rev_fr_vocab[output]) for output in outputs]))
+            output_logits, outputs = model.step(sess, encoder_inputs, decoder_inputs,
+                                                encoder_length, decoder_length, True)
+            for i in range(len(outputs) // 2):
+                for j in range(outputs[i*2].shape[0]):
+                    output = outputs[i*2][j].tolist()
+                    prob = outputs[i*2+1][j]
+                    # If there is an EOS symbol in outputs, cut them at that point.
+                    #if data_utils.EOS_ID in outputs:
+                    #    output = output[:output.index(data_utils.EOS_ID)]
+                    # Print out French sentence corresponding to outputs.
+                    print("%s (%.3f)" % (" ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output]), prob))
             print("> ", end="")
             sys.stdout.flush()
             sentence = sys.stdin.readline()
