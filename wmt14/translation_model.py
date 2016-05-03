@@ -170,12 +170,10 @@ class TranslationModel(object):
             self.outputs = [nn_ops.xw_plus_b(o, w, self.symbol_bias) for o in rnn_outputs]
 
             # Gradients and SGD update operation for training the model.
-            params = tf.trainable_variables()
             if not forward_only:
-                def loss(logit, target):
-                    return tf.minimum(tf.nn.sparse_softmax_cross_entropy_with_logits(logit, target), 10)
+                params = tf.trainable_variables()
                 self.loss = my_seq2seq.sequence_loss(self.outputs[:-1], targets, self.decoder_length,
-                                                     softmax_loss_function=loss)
+                                                     softmax_loss_function=tf.nn.sparse_softmax_cross_entropy_with_logits)
                 opt = tf.train.AdamOptimizer(self.learning_rate, beta1=0.0)
                 gradients = tf.gradients(self.loss, params)
                 for g, p in zip(gradients, params):
