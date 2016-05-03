@@ -379,45 +379,28 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         if isinstance(cellA, AssociativeGRUCell):
             print("Use AssociativeGRU")
-            #prepro_cell = GRUCell(cellA.output_size)
             E = create_embeddings()
             if keep_prob < 1.0:
-                #prepro_cell = DropoutWrapper(prepro_cell, keep_prob_var)
                 cellA = DropoutWrapper(cellA, keep_prob_var)
                 cellB = DropoutWrapper(cellB, keep_prob_var)
-            # with tf.variable_scope("prepro", initializer=initializer):
-            #     _, _, outsP = my_rnn(idsA, prepro_cell, lengthsA, E)
-            #     tf.get_variable_scope().reuse_variables()
-            #     _, _, outsH = my_rnn(idsB, prepro_cell, lengthsB, E)
+
             with tf.variable_scope("assoc_m", initializer=initializer):
-                #_, _, outsP = my_rnn(idsA, prepro_cell, lengthsA)
-                #_, c, outsP = my_rnn(None, cellA, lengthsA, None, additional_inputs=tf.pack(outsP))
+
                 _, c, outsP = my_rnn(idsA, cellA, lengthsA, E)
-            #with tf.variable_scope("assoc_m2", initializer=initializer):
-                #tf.get_variable_scope().reuse_variables()
-                #_, _, outsH = my_rnn(idsB, prepro_cell, lengthsB)
-                rest_state = tf.zeros([cellB.state_size - cellA.state_size + cellA.output_size], tf.float32)
-                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
-                c = tf.concat(1, [rest_state, tf.slice(c, [0, cellA.output_size], [-1, -1])])
-                #_, _, outsH = my_rnn(None, cellB, lengthsB, None, init_state=c, additional_inputs=tf.pack(outsH))
+
+                if cellB.state_size > cellA.state_size:
+                    rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
+                    rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
+                    c = tf.concat(1, [rest_state, c])
                 _, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=c)
-
-
-            #avg_p = tf.add_n(outsP) / tf.cast(tf.tile(tf.expand_dims(lengthsA, 1), [1, h_size]), tf.float32)
-            #avg_h = tf.add_n(outsH) / tf.cast(tf.tile(tf.expand_dims(lengthsB, 1), [1, h_size]), tf.float32)
-
-#            with tf.variable_scope("premise", initializer=initializer):
- #               p, s, _ = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
-  #                               lengthsA, additional_inputs=tf.pack(outsP))
 
             with tf.variable_scope("accumulator", initializer=initializer):
                 p, _, outsP = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
-                                     lengthsA, additional_inputs=tf.pack(outsP)) #, init_state=s)
+                                     lengthsA, additional_inputs=tf.pack(outsP))
                 tf.get_variable_scope().reuse_variables()
                 h, _, outsH = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
-                                     lengthsB, additional_inputs=tf.pack(outsH)) #, init_state=s)
+                                     lengthsB, additional_inputs=tf.pack(outsH), init_state=p)
 
-            h = tf.concat(1, [p, h, tf.abs(p-h)])
         else:
             if keep_prob < 1.0:
                 cellA = DropoutWrapper(cellA, keep_prob_var)
@@ -427,16 +410,11 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
                 tf.get_variable_scope().reuse_variables()
                 h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
-            h = tf.concat(1, [p, h, tf.abs(p-h)])
 
-        #with tf.variable_scope("hypothesis", initializer=initializer):
-         #   hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
 
-        #h = tf.concat(1, [p, h])
-        #h = hypothesis
-
-        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0,x),  #use rectifier
-                                              weight_init=None)
+        h = tf.concat(1, [p, h, tf.abs(p-h)])
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)
         scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
