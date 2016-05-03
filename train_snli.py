@@ -68,8 +68,10 @@ def training(embeddings, FLAGS):
                 ops = FLAGS.moru_ops.split(",")
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, rng=random.Random(123))
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, share=True, rng=random.Random(123))
+                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size,
+                                           rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, share=True,
+                                               rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -462,6 +464,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_integer('checkpoint', 1000, 'number of batches until checkpoint.')
     tf.app.flags.DEFINE_integer('num_copies', 1, 'number of copies for associative RNN.')
+    tf.app.flags.DEFINE_integer('num_read_keys', 0, 'number of additional read keys for associative RNN.')
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
     tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "

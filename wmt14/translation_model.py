@@ -84,7 +84,7 @@ class TranslationModel(object):
             self.symbol_bias = tf.get_variable("proj_b", [self.target_vocab_size])
             output_projection = (w, self.symbol_bias)
 
-            def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
+            def seq2seq_f(encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
                 enc_cell, dec_cell = None, None
                 if cell_type == "AssociativeGRU":
                     print("Use AssociativeGRU!")
@@ -97,14 +97,14 @@ class TranslationModel(object):
                         if num_layers > 2:
                             lower_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell] * (num_layers-1))
                         with tf.variable_scope("encoder"):
-                            encoder_inputs, final_enc_state = my_seq2seq.my_rnn(EmbeddingWrapper(lower_cell, source_vocab_size, size),
-                                                                                   encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
-                            encoder_inputs = [tf.reshape(o, [-1, size]) for o in encoder_inputs]
+                            rev_encoder_inputs, final_enc_state = my_seq2seq.my_rnn(EmbeddingWrapper(lower_cell, source_vocab_size, size),
+                                                                                rev_encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
+                            rev_encoder_inputs = [tf.reshape(o, [-1, size]) for o in rev_encoder_inputs]
                     else:
                         enc_cell = EmbeddingWrapper(enc_cell, source_vocab_size, size)
 
                     with tf.variable_scope("encoder_top"):
-                        encoder_outputs, c = my_seq2seq.my_rnn(enc_cell, encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
+                        encoder_outputs, c = my_seq2seq.my_rnn(enc_cell, rev_encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
 
                     if dec_cell.state_size > enc_cell.state_size:
                         rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
@@ -122,13 +122,13 @@ class TranslationModel(object):
                                                             output_projection=output_projection, beam_size=5,
                                                             feed_previous=do_decode)
                 else:
-                    cell = None
+                    enc_cell = None
                     if cell_type == "LSTM":
-                        cell = BasicLSTMCell(size,size)
+                        enc_cell = BasicLSTMCell(size,size)
                     else:
-                        cell = GRUCell(size, size)
+                        enc_cell = GRUCell(size, size)
                     if num_layers > 1:
-                        cell = tf.nn.rnn_cell.MultiRNNCell([cell] * num_layers)
+                        enc_cell = tf.nn.rnn_cell.MultiRNNCell([enc_cell] * num_layers)
                     if attention:
                         print("Use attention!")
                         dec_cell = None
@@ -137,25 +137,59 @@ class TranslationModel(object):
                         else:
                             dec_cell = GRUCell(size, 2*size)
                         if num_layers > 1:
-                            dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] + [cell] * num_layers)
-                        return my_seq2seq.embedding_attention_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
-                                                                      cell, dec_cell, source_vocab_size, target_vocab_size, size,
-                                                                      output_projection=output_projection, beam_size=5,
-                                                                      feed_previous=do_decode)
+                            dec_cell = tf.nn.rnn_cell.MultiRNNCell([dec_cell] + [enc_cell] * num_layers)
+
+                        with tf.variable_scope("encoder"):
+                            with tf.variable_scope("embedding"):
+                                with ops.device("/cpu:0"):
+                                    embedding = vs.get_variable("embedding", [source_vocab_size, size])
+                                    embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
+                                    rev_embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
+
+                            # Encoder.
+                            with tf.variable_scope("forward"):
+                                encoder_outputs, encoder_state = \
+                                    my_seq2seq.my_rnn(enc_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
+
+                                top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
+                                              for e in encoder_outputs]
+                                attention_states = array_ops.concat(1, top_states)
+                            with tf.variable_scope("backward"):
+                                rev_encoder_outputs, rev_encoder_state = \
+                                    my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
+
+                                rev_top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
+                                                  for e in rev_encoder_outputs]
+                                rev_attention_states = tf.reverse_sequence(
+                                    tf.concat(1, rev_top_states), tf.cast(encoder_length, tf.int64), 1, 0)
+
+                            attention_states = tf.reshape(tf.concat(2, [attention_states, rev_attention_states]),
+                                                          [batch_size, -1, enc_cell.output_size])
+
+                        # Decoder.
+                        return my_seq2seq.embedding_attention_decoder(
+                            decoder_inputs, decoder_length, rev_encoder_state, attention_states, encoder_length, dec_cell,
+                            target_vocab_size, size,
+                            output_projection=output_projection if do_decode else None,
+                            feed_previous=do_decode, beam_size=5)
                     else:
-                        return my_seq2seq.embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, decoder_length, encoder_length,
-                                                                cell, source_vocab_size, target_vocab_size, size,
+                        return my_seq2seq.embedding_rnn_seq2seq(rev_encoder_inputs, decoder_inputs, decoder_length, encoder_length,
+                                                                enc_cell, source_vocab_size, target_vocab_size, size,
                                                                 output_projection=output_projection, beam_size=5,
                                                                 feed_previous=do_decode)
 
             # Feeds for inputs.
             self.encoder_inputs = []
+            self.rev_encoder_inputs = []
             self.decoder_inputs = []
             self.encoder_length = tf.placeholder(tf.int32, shape=[None], name="encoder_length")
             self.decoder_length = tf.placeholder(tf.int32, shape=[None], name="decoder_length")
             for i in range(max_length):  # Last bucket is the biggest one.
                 self.encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                           name="encoder{0}".format(i)))
+            for i in range(max_length):  # Last bucket is the biggest one.
+                self.rev_encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
+                                                              name="rev_encoder{0}".format(i)))
             for i in range(max_length):
                 self.decoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                           name="decoder{0}".format(i)))
@@ -165,7 +199,7 @@ class TranslationModel(object):
                        for i in range(len(self.decoder_inputs) - 1)]
 
             # Training outputs and losses.
-            rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
+            rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.rev_encoder_inputs, self.decoder_inputs,
                                                      self.encoder_length, self.decoder_length, forward_only)
             self.outputs = [nn_ops.xw_plus_b(o, w, self.symbol_bias) for o in rnn_outputs]
 
@@ -187,7 +221,7 @@ class TranslationModel(object):
     def set_no_unk(self, sess):
         sess.run(tf.scatter_update(self.symbol_bias, [data_utils.UNK_ID], [-10000]))
 
-    def step(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
+    def step(self, session, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
         """Run a step of the model feeding the given inputs.
 
         Args:
@@ -213,12 +247,14 @@ class TranslationModel(object):
         input_feed = {}
         for l in range(encoder_size):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[l]
+            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[l]
         for l in range(decoder_size):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
         for l in range(encoder_size, self.max_length):
-            input_feed[self.encoder_inputs[l].name] = decoder_inputs[-1]
+            input_feed[self.encoder_inputs[l].name] = encoder_inputs[-1]
+            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[-1]
         for l in range(decoder_size, self.max_length):
-            input_feed[self.decoder_inputs[l].name] = encoder_inputs[-1]
+            input_feed[self.decoder_inputs[l].name] = decoder_inputs[-1]
 
         input_feed[self.encoder_length.name] = encoder_length
         input_feed[self.decoder_length.name] = decoder_length
@@ -239,18 +275,20 @@ class TranslationModel(object):
             return None, outputs[0], outputs[1:]  # None, loss, outputs
 
 
-    def decode(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
+    def decode(self, session, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
         encoder_size, decoder_size = max(encoder_length), max(decoder_length)
         # Input feed: encoder inputs, decoder inputs, target_weights, as provided.
         input_feed = {}
         for l in range(encoder_size):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[l]
+        for l in range(encoder_size):
+            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[l]
         for l in range(decoder_size):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
         for l in range(encoder_size, self.max_length):
-            input_feed[self.encoder_inputs[l].name] = decoder_inputs[-1]
+            input_feed[self.encoder_inputs[l].name] = encoder_inputs[-1]
         for l in range(decoder_size, self.max_length):
-            input_feed[self.decoder_inputs[l].name] = encoder_inputs[-1]
+            input_feed[self.decoder_inputs[l].name] = decoder_inputs[-1]
 
         input_feed[self.encoder_length.name] = encoder_length
         input_feed[self.decoder_length.name] = decoder_length
@@ -274,7 +312,7 @@ class TranslationModel(object):
           The triple (encoder_inputs, decoder_inputs, target_weights) for
           the constructed batch that has the proper format to call step(...) later.
         """
-        encoder_inputs, decoder_inputs, encoder_lengths, decoder_lengths = [], [], [], []
+        encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_lengths, decoder_lengths = [], [], [], [], []
 
         # Get a random batch of encoder and decoder inputs from data,
         # pad them if needed, reverse encoder inputs and add GO to decoder.
@@ -286,24 +324,27 @@ class TranslationModel(object):
             decoder_lengths.append(decoder_size)
             # Encoder inputs are padded and then reversed.
             encoder_pad = [data_utils.PAD_ID] * (self.max_length - encoder_size)
-            encoder_inputs.append(list(reversed(encoder_input)) + encoder_pad)
-
+            encoder_inputs.append(encoder_input + encoder_pad)
+            rev_encoder_inputs.append(list(reversed(encoder_input)) + encoder_pad)
             # Decoder inputs get an extra "GO" symbol, and are padded then.
             decoder_pad_size = self.max_length - decoder_size - 1
             decoder_inputs.append([data_utils.GO_ID] + decoder_input +
                                   [data_utils.PAD_ID] * decoder_pad_size)
 
         # Now we create batch-major vectors from the data selected above.
-        batch_encoder_inputs, batch_decoder_inputs = [], []
+        batch_encoder_inputs, batch_rev_encoder_inputs, batch_decoder_inputs = [], [], []
 
         # Batch encoder inputs are just re-indexed encoder_inputs.
         for length_idx in range(self.max_length):
             batch_encoder_inputs.append(
                 np.array([encoder_inputs[batch_idx][length_idx]
                           for batch_idx in range(self.batch_size)], dtype=np.int32))
+            batch_rev_encoder_inputs.append(
+                np.array([rev_encoder_inputs[batch_idx][length_idx]
+                          for batch_idx in range(self.batch_size)], dtype=np.int32))
             batch_decoder_inputs.append(
                 np.array([decoder_inputs[batch_idx][length_idx]
                           for batch_idx in range(self.batch_size)], dtype=np.int32))
 
-        return batch_encoder_inputs, batch_decoder_inputs, \
+        return batch_encoder_inputs, batch_rev_encoder_inputs, batch_decoder_inputs, \
                np.array(encoder_lengths, dtype=np.int32), np.array(decoder_lengths, dtype=np.int32)

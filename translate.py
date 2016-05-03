@@ -147,8 +147,8 @@ def train():
         while True:
             # Get a batch and make a step.
             start_time = time.time()
-            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(train_set)
-            step_norm, step_loss, _ = model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
+            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(train_set)
+            step_norm, step_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
             step_time += (time.time() - start_time) / FLAGS.steps_per_checkpoint
             loss += step_loss / FLAGS.steps_per_checkpoint
             norm += step_norm / FLAGS.steps_per_checkpoint
@@ -166,8 +166,8 @@ def train():
                 model.saver.save(sess, checkpoint_path, global_step=model.global_step)
                 step_time, loss = 0.0, 0.0
                 # Run evals on development set and print their perplexity.
-                encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(dev_set)
-                _, eval_loss, _ = model.step(sess, encoder_inputs, decoder_inputs,
+                encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(dev_set)
+                _, eval_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs,
                                              encoder_length, decoder_length, True)
                 eval_ppx = math.exp(eval_loss) if eval_loss < 300 else float('inf')
                 # Decrease learning rate if no improvement was seen over last 3 times.
@@ -232,8 +232,8 @@ def self_test():
         # Fake data set for both the (3, 3) and (6, 6) bucket.
         data_set = [([1, 1], [2, 2]), ([3, 3], [4]), ([5], [6]), ([1, 1, 1, 1, 1], [2, 2, 2, 2, 2]), ([3, 3, 3], [5, 6])]
         for _ in range(5):  # Train the fake model for 5 steps.
-            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(data_set)
-            model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
+            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(data_set)
+            model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
 
 
 def main(_):
