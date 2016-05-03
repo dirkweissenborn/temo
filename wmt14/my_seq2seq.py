@@ -788,7 +788,12 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             # pylint: disable=cell-var-from-loop
             def call_cell():
                 # Merge input and previous attentions into one vector of the right size.
-                x = tf.concat(1, [inp] + HACK[0])
+                x = None
+                if loop_function:
+                    my_attns = [tf.reshape(tf.tile(a, tf.pack([tf.shape(inp)[0] // tf.shape(a)[0], 1])), [-1, attn_size]) for a in HACK[0]]
+                    x = tf.concat(1, [inp] + my_attns)
+                else:
+                    x = tf.concat(1, [inp] + HACK[0])
                 cell_output, cell_state = cell(x, state)
                 # Run the attention mechanism.
                 if time == 0 and initial_state_attention:

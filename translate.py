@@ -48,6 +48,7 @@ tf.app.flags.DEFINE_integer("max_length", 50, "limit length of sentences.")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 200,
                             "How many training steps to do per checkpoint.")
 tf.app.flags.DEFINE_boolean("decode", False, "Set to True for interactive decoding.")
+tf.app.flags.DEFINE_boolean("no_unk", False, "Do not use <UNK> during decoding.")
 tf.app.flags.DEFINE_boolean("self_test", False, "Run a self-test if this is set to True.")
 tf.app.flags.DEFINE_boolean("attention", False, "Use attention.")
 tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
@@ -120,7 +121,7 @@ def train():
         FLAGS.data_dir, FLAGS.en_vocab_size, FLAGS.fr_vocab_size)
 
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
-                                          gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.8))) as sess:
+                                          gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.95))) as sess:
         # Read data.
         print("Reading development and training data (limit: %d)."
                % FLAGS.max_train_data_size)
@@ -182,7 +183,8 @@ def decode():
         # Create model and load parameters.
         FLAGS.batch_size = 1
         model = create_model(sess, True, FLAGS.max_length)
-
+        if FLAGS.no_unk:
+            model.set_no_unk(sess)
         # Load vocabularies.
         en_vocab_path = os.path.join(FLAGS.data_dir,
                                      "vocab%d.en" % FLAGS.en_vocab_size)
@@ -201,8 +203,7 @@ def decode():
             # Get a 1-element batch to feed the sentence to the model.
             encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
             # Get output logits for the sentence.
-            output_logits, outputs = model.step(sess, encoder_inputs, decoder_inputs,
-                                                encoder_length, decoder_length, True)
+            outputs = model.decode(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
             for i in range(len(outputs) // 2):
                 for j in range(outputs[i*2].shape[0]):
                     output = outputs[i*2][j].tolist()

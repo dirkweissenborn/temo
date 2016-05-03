@@ -81,8 +81,8 @@ class TranslationModel(object):
 
         with tf.variable_scope("translation", initializer=initializer):
             w = tf.get_variable("proj_w", [size, self.target_vocab_size])
-            b = tf.get_variable("proj_b", [self.target_vocab_size])
-            output_projection = (w, b)
+            self.symbol_bias = tf.get_variable("proj_b", [self.target_vocab_size])
+            output_projection = (w, self.symbol_bias)
 
             def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
                 enc_cell, dec_cell = None, None
@@ -167,7 +167,7 @@ class TranslationModel(object):
             # Training outputs and losses.
             rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
                                                      self.encoder_length, self.decoder_length, forward_only)
-            self.outputs = [nn_ops.xw_plus_b(o, w, b) for o in rnn_outputs]
+            self.outputs = [nn_ops.xw_plus_b(o, w, self.symbol_bias) for o in rnn_outputs]
 
             # Gradients and SGD update operation for training the model.
             params = tf.trainable_variables()
@@ -185,6 +185,9 @@ class TranslationModel(object):
                 clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
                 self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
             self.saver = tf.train.Saver(tf.all_variables())
+
+    def set_no_unk(self, sess):
+        sess.run(tf.scatter_update(self.symbol_bias, [data_utils.UNK_ID], [-10000]))
 
     def step(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
         """Run a step of the model feeding the given inputs.
@@ -228,16 +231,35 @@ class TranslationModel(object):
                            self.gradient_norm,  # Gradient norm.
                            self.loss]  # Loss for this batch.
         else:
-            output_feed = []  # Loss for this batch.
+            output_feed = [self.loss]  # Loss for this batch.
             for l in range(decoder_size):  # Output logits.
                 output_feed.append(self.outputs[l])
-            output_feed = output_feed + self.decoded
-
         outputs = session.run(output_feed, input_feed)
         if not forward_only:
             return outputs[1], outputs[2], None  # Gradient norm, loss, no outputs.
         else:
-            return outputs[:decoder_size], outputs[decoder_size:]  # loss, outputs, decoded symbols
+            return None, outputs[0], outputs[1:]  # None, loss, outputs
+
+
+    def decode(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
+        encoder_size, decoder_size = max(encoder_length), max(decoder_length)
+        # Input feed: encoder inputs, decoder inputs, target_weights, as provided.
+        input_feed = {}
+        for l in range(encoder_size):
+            input_feed[self.encoder_inputs[l].name] = encoder_inputs[l]
+        for l in range(decoder_size):
+            input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
+        for l in range(encoder_size, self.max_length):
+            input_feed[self.encoder_inputs[l].name] = decoder_inputs[-1]
+        for l in range(decoder_size, self.max_length):
+            input_feed[self.decoder_inputs[l].name] = encoder_inputs[-1]
+
+        input_feed[self.encoder_length.name] = encoder_length
+        input_feed[self.decoder_length.name] = decoder_length
+
+        outputs = session.run(self.decoded, input_feed)
+        return outputs # loss, outputs, decoded symbols
+
 
     def get_batch(self, data):
         """Get a random batch of data from the specified bucket, prepare for step.
