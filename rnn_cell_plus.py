@@ -201,7 +201,7 @@ class ControllerWrapper(RNNCell):
     def __call__(self, inputs, state, scope=None):
         ctr_state = tf.slice(state, [0, 0], [-1,self._controller_cell.state_size])
         inner_state = None
-        if self._cell.state_size:
+        if self._cell.state_size > 0:
             inner_state = tf.slice(state, [0, self._controller_cell.state_size], [-1, self._cell.state_size])
         inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size], [-1,-1])
         inputs = tf.concat(1, [inputs, inner_out])
@@ -211,13 +211,13 @@ class ControllerWrapper(RNNCell):
         if self._output_proj is not None:
             with tf.variable_scope("Output_Projection"):
                 out = self._output_proj(out, self.output_size)
-        if self._cell.state_size:
+        if self._cell.state_size > 0:
             return out, tf.concat(1, [ctr_state, inner_state, inner_out])
         else:
             return out, tf.concat(1, [ctr_state, inner_out])
 
     def zero_state(self, batch_size, dtype):
-        if self._cell.state_size:
+        if self._cell.state_size > 0:
             return tf.concat(1, [self._controller_cell.zero_state(), self._cell.zero_state(),
                              tf.zeros([batch_size,self._cell.output_size]),tf.float32])
         else:

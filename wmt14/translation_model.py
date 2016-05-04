@@ -90,7 +90,7 @@ class TranslationModel(object):
                     print("Use AssociativeGRU!")
                     ctr_cell = GRUCell(size, size*2)
                     enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
-                    ctr_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, share=False, rng=random.Random(123))
+                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
 
                     enc_cell = ControllerWrapper(ctr_cell, enc_cell)
 
@@ -98,7 +98,7 @@ class TranslationModel(object):
                         output = linear([out], 2 * out_size, True)
                         output = tf.reduce_max(tf.reshape(output, [-1, 2, out_size]), [1], keep_dims=False)
                         return output
-                    ctr_cell = ControllerWrapper(ctr_cell, ctr_cell, outproj, size)
+                    dec_cell = ControllerWrapper(ctr_cell, dec_cell, outproj, size)
 
                     inputs = rev_encoder_inputs
                     if num_layers > 1:
@@ -121,11 +121,11 @@ class TranslationModel(object):
                     with tf.variable_scope("encoder_top"):
                         encoder_outputs, c = my_seq2seq.my_rnn(enc_cell, inputs, sequence_length=encoder_length, dtype=tf.float32)
 
-                    if ctr_cell.state_size > enc_cell.state_size:
-                        rest_state = tf.zeros([batch_size, ctr_cell.state_size - enc_cell.state_size], tf.float32)
+                    if dec_cell.state_size > enc_cell.state_size:
+                        rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
                         c = tf.concat(1, [rest_state, c])
 
-                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, ctr_cell,
+                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
                                                             target_vocab_size, size,
                                                             output_projection=output_projection, beam_size=5,
                                                             feed_previous=do_decode)
