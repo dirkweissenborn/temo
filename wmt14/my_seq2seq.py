@@ -650,8 +650,8 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, encoder_length, d
                 return outputs + [state], to_emit
 
         outputs_and_state, to_emit = control_flow_ops.cond(feed_previous,
-                                                              lambda: decoder(True),
-                                                              lambda: decoder(False))
+                                                           lambda: decoder(True),
+                                                           lambda: decoder(False))
         return outputs_and_state[:-1], outputs_and_state[-1], to_emit
 
 
@@ -740,17 +740,31 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
         def attention(query):
             """Put attention masks on hidden using hidden_features and query."""
             ds = []  # Results of attention reads will be stored here.
-            mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(attn_length, tf.float32), attn_length), [1, -1]),
+            lengths = None
+            mask = None
+            c_batch_size = None
+            if loop_function is not None:  # this is decoding
+                c_batch_size = tf.shape(query)[0]
+                mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(attn_length, tf.float32), attn_length), [1, -1]),
+                               tf.pack([c_batch_size, 1]))
+                lengths = tf.tile(tf.expand_dims(tf.cast(attention_length, tf.float32), 1), tf.pack([c_batch_size, attn_length]))
+            else:
+                mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(attn_length, tf.float32), attn_length), [1, -1]),
                            tf.pack([batch_size, 1]))
-            lengths = tf.tile(tf.expand_dims(tf.cast(attention_length, tf.float32), 1), tf.pack([1, attn_length]))
+                lengths = tf.tile(tf.expand_dims(tf.cast(attention_length, tf.float32), 1), tf.pack([1, attn_length]))
+
             mask = tf.cast(tf.greater(mask, lengths), tf.float32) * -1000.0
             for a in xrange(num_heads):
                 with variable_scope.variable_scope("Attention_%d" % a):
                     y = rnn_cell.linear(query, attention_vec_size, True)
                     y = array_ops.reshape(y, [-1, 1, 1, attention_vec_size])
                     # Attention mask is a softmax of v^T * tanh(...).
-                    s = math_ops.reduce_sum(
-                        v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
+                    s = None
+                    if loop_function is not None:
+                        hf = tf.tile(hidden_features[a], tf.pack([c_batch_size,1,1,1]))
+                        s = math_ops.reduce_sum(v[a] * math_ops.tanh(hf + y), [2, 3])
+                    else:
+                        s = math_ops.reduce_sum(v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
                     a = nn_ops.softmax(s + mask)
                     #a = tf.Print(a, [a, mask, attention_length], "Attention Weights")
                     # Now calculate the attention-weighted vector d.
@@ -766,8 +780,6 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
                  for _ in xrange(num_heads)]
         for a in attns:  # Ensure the second shape of attention vectors is set.
             a.set_shape([None, attn_size])
-        if initial_state_attention:
-            attns = attention(initial_state)
 
         if decoder_length is not None:
             decoder_length = math_ops.to_int32(decoder_length)
@@ -779,7 +791,7 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             max_sequence_length = math_ops.reduce_max(decoder_length)
 
         prev = None
-        HACK = [attns]
+        HACK_ATTNS = [attns]
         for time, inp in enumerate(decoder_inputs):
             if loop_function is not None and prev is not None:
                 with variable_scope.variable_scope("loop_function", reuse=True):
@@ -787,29 +799,23 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             if time > 0: tf.get_variable_scope().reuse_variables()
             # pylint: disable=cell-var-from-loop
             def call_cell():
-                # Merge input and previous attentions into one vector of the right size.
-                x = None
-                if loop_function:
-                    my_attns = [tf.reshape(tf.tile(a, tf.pack([tf.shape(inp)[0] // tf.shape(a)[0], 1])), [-1, attn_size]) for a in HACK[0]]
-                    x = tf.concat(1, [inp] + my_attns)
-                else:
-                    x = tf.concat(1, [inp] + HACK[0])
-                cell_output, cell_state = cell(x, state)
                 # Run the attention mechanism.
                 if time == 0 and initial_state_attention:
                     with variable_scope.variable_scope(variable_scope.get_variable_scope(), reuse=True):
-                        HACK[0] = attention(state)
+                        HACK_ATTNS[0] = attention(state)
                 else:
-                    HACK[0] = attention(state)
+                    HACK_ATTNS[0] = attention(state)
+                # Concat input and previous attentions into one vector
+                x = tf.concat(1, [inp] + HACK_ATTNS[0])
 
-                with variable_scope.variable_scope("AttnOutputProjection"):
-                    output = rnn_cell.linear([cell_output] + HACK[0], output_size, True)
-                return output, cell_state
+                return cell(x, state)
 
             # pylint: enable=cell-var-from-loop
             if decoder_length is not None:
+                inp_batch_size = tf.shape(inp)[0]
+                t = tf.cond(tf.equal(inp_batch_size, 0), lambda: max_sequence_length, lambda: tf.constant(time))
                 (output, state) = rnn._rnn_step(
-                    time, decoder_length, min_sequence_length, max_sequence_length,
+                    t, decoder_length, min_sequence_length, max_sequence_length,
                     zero_output, state, call_cell)
             else:
                 (output, state) = call_cell()

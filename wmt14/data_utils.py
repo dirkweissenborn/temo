@@ -224,7 +224,7 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                     tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
 
 
-def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer=None):
+def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer=None, only_test=False):
     """Get WMT data into data_dir, create vocabularies and tokenize data.
     Args:
       data_dir: directory in which the data sets will be stored.
@@ -249,8 +249,10 @@ def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer
 
     fr_train_ids_path = train_path + (".ids%d.fr" % fr_vocabulary_size)
     en_train_ids_path = train_path + (".ids%d.en" % en_vocabulary_size)
+    fr_dev_ids_path = dev_path + (".ids%d.fr" % fr_vocabulary_size)
+    en_dev_ids_path = dev_path + (".ids%d.en" % en_vocabulary_size)
 
-    if not gfile.Exists(en_train_ids_path):
+    if not only_test and not gfile.Exists(en_train_ids_path):
         # Get wmt data to the specified directory.
         get_wmt_enfr_train_set(data_dir)
         dev_path, test_path = get_wmt_enfr_dev_test_set(data_dir)
@@ -261,17 +263,15 @@ def prepare_wmt_data(data_dir, en_vocabulary_size, fr_vocabulary_size, tokenizer
     create_vocabulary(fr_vocab_path, train_path + ".fr", fr_vocabulary_size, tokenizer)
     create_vocabulary(en_vocab_path, train_path + ".en", en_vocabulary_size, tokenizer)
 
-    # Create token ids for the training data.
+    if not only_test:
+        # Create token ids for the training data.
+        data_to_token_ids(train_path + ".fr", fr_train_ids_path, fr_vocab_path, tokenizer)
+        data_to_token_ids(train_path + ".en", en_train_ids_path, en_vocab_path, tokenizer)
+        # Create token ids for the development data.
+    if not only_test:
+        data_to_token_ids(dev_path + ".fr", fr_dev_ids_path, fr_vocab_path, tokenizer)
+        data_to_token_ids(dev_path + ".en", en_dev_ids_path, en_vocab_path, tokenizer)
 
-    data_to_token_ids(train_path + ".fr", fr_train_ids_path, fr_vocab_path, tokenizer)
-    data_to_token_ids(train_path + ".en", en_train_ids_path, en_vocab_path, tokenizer)
-
-    # Create token ids for the development data.
-    fr_dev_ids_path = dev_path + (".ids%d.fr" % fr_vocabulary_size)
-    en_dev_ids_path = dev_path + (".ids%d.en" % en_vocabulary_size)
-    data_to_token_ids(dev_path + ".fr", fr_dev_ids_path, fr_vocab_path, tokenizer)
-    data_to_token_ids(dev_path + ".en", en_dev_ids_path, en_vocab_path, tokenizer)
-    
     # Create token ids for the test data.
     fr_test_ids_path = test_path + (".ids%d.fr" % fr_vocabulary_size)
     en_test_ids_path = test_path + (".ids%d.en" % en_vocabulary_size)

@@ -88,7 +88,7 @@ class TranslationModel(object):
                 enc_cell, dec_cell = None, None
                 if cell_type == "AssociativeGRU":
                     print("Use AssociativeGRU!")
-                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
+                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=2*size, rng=random.Random(123))
                     dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, share=False, rng=random.Random(123))
 
                     final_enc_state = None
@@ -97,9 +97,30 @@ class TranslationModel(object):
                         if num_layers > 2:
                             lower_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell] * (num_layers-1))
                         with tf.variable_scope("encoder"):
-                            rev_encoder_inputs, final_enc_state = my_seq2seq.my_rnn(EmbeddingWrapper(lower_cell, source_vocab_size, size),
-                                                                                rev_encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
-                            rev_encoder_inputs = [tf.reshape(o, [-1, size]) for o in rev_encoder_inputs]
+                            with tf.variable_scope("embedding"):
+                                with ops.device("/cpu:0"):
+                                    embedding = vs.get_variable("embedding", [source_vocab_size, size])
+                                    embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
+                                    rev_embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
+
+                            # Encoder.
+                            with tf.variable_scope("forward"):
+                                encoder_outputs, encoder_state = \
+                                    my_seq2seq.my_rnn(lower_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
+                                attention_states = tf.pack(encoder_outputs)
+                            with tf.variable_scope("backward"):
+                                rev_encoder_outputs, rev_encoder_state = \
+                                    my_seq2seq.my_rnn(lower_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
+
+                                rev_attention_states = tf.reverse_sequence(
+                                        tf.pack(rev_encoder_outputs), tf.cast(encoder_length, tf.int64), 0, 1)
+
+                            attention_states = tf.reshape(tf.concat(2, [attention_states, rev_attention_states]),
+                                                          [-1, 2*size])
+
+                        inputs = tf.split(0, max_length, attention_states)
+                        rev_encoder_inputs = [tf.reshape(o, [-1, 2*size]) for o in inputs]
+
                     else:
                         enc_cell = EmbeddingWrapper(enc_cell, source_vocab_size, size)
 
@@ -109,11 +130,11 @@ class TranslationModel(object):
                     if dec_cell.state_size > enc_cell.state_size:
                         rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
                         if num_layers > 1:
-                            c = tf.concat(1, [final_enc_state, rest_state, c])
+                            c = tf.concat(1, [rev_encoder_state, rest_state, c])
                         else:
                             c = tf.concat(1, [rest_state, c])
                     elif num_layers > 1:
-                        c = tf.concat(1, [final_enc_state, c])
+                        c = tf.concat(1, [rev_encoder_state, c])
 
                     if num_layers > 1:
                         dec_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell, dec_cell])
@@ -287,6 +308,7 @@ class TranslationModel(object):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
         for l in range(encoder_size, self.max_length):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[-1]
+            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[-1]
         for l in range(decoder_size, self.max_length):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[-1]
 

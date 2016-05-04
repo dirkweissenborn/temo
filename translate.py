@@ -48,10 +48,13 @@ tf.app.flags.DEFINE_integer("max_length", 50, "limit length of sentences.")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 200,
                             "How many training steps to do per checkpoint.")
 tf.app.flags.DEFINE_boolean("decode", False, "Set to True for interactive decoding.")
+tf.app.flags.DEFINE_boolean("test", False, "Decode test set.")
 tf.app.flags.DEFINE_boolean("no_unk", False, "Do not use <UNK> during decoding.")
 tf.app.flags.DEFINE_boolean("self_test", False, "Run a self-test if this is set to True.")
 tf.app.flags.DEFINE_boolean("attention", False, "Use attention.")
 tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
+tf.app.flags.DEFINE_string("decode_out", "/tmp/decoded", "Directory of decoding output.")
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -201,9 +204,11 @@ def decode():
             # Get token-ids for the input sentence.
             token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), en_vocab)
             # Get a 1-element batch to feed the sentence to the model.
-            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
-            # Get output logits for the sentence.
-            outputs = model.decode(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
+            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = \
+                model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
+            # Get output symbols for the sentence.
+            outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
+            print(outputs)
             for i in range(len(outputs) // 2):
                 for j in range(outputs[i*2].shape[0]):
                     output = outputs[i*2][j].tolist()
@@ -216,6 +221,61 @@ def decode():
             print("> ", end="")
             sys.stdout.flush()
             sentence = sys.stdin.readline()
+
+
+def decode_testset():
+    _, _, _, _, en_test, fr_test, en_vocab_path, fr_vocab_path = data_utils.prepare_wmt_data(
+        FLAGS.data_dir, FLAGS.en_vocab_size, FLAGS.fr_vocab_size, only_test=True)
+    en_vocab, rev_en_vocab = data_utils.initialize_vocabulary(en_vocab_path)
+    _, rev_fr_vocab = data_utils.initialize_vocabulary(fr_vocab_path)
+
+    test_set, max_length = read_data(en_test, fr_test, FLAGS.max_length)
+    if not os.path.exists(FLAGS.decode_out):
+        os.mkdir(FLAGS.decode_out)
+    src_file = os.path.join(FLAGS.decode_out, "src.txt")
+    ref_file = os.path.join(FLAGS.decode_out, "ref.txt")
+    trs_file = os.path.join(FLAGS.decode_out, "trs.txt")
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+        # Create model and load parameters.
+        FLAGS.batch_size = 1
+        model = create_model(sess, True, FLAGS.max_length)
+        if FLAGS.no_unk:
+            model.set_no_unk(sess)
+        print("Start decoding test file to %s!" % FLAGS.decode_out)
+        size = len(test_set)
+        with open(src_file, 'w') as sf, open(ref_file, 'w') as rf, open(trs_file, 'w') as xf:
+            i = 0
+            for (en_tokens, fr_tokens) in test_set:
+                if not FLAGS.no_unk or data_utils.UNK_ID not in en_tokens:
+                    encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
+                                                                                                            max(max_length, 2 * len(en_tokens)))])
+
+                    outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
+                    best = (None, -float("inf"))
+                    for i in range(len(outputs) // 2):
+                        for j in range(outputs[i*2].shape[0]):
+                            prob = outputs[i*2+1][j]
+                            if prob > best[1]:
+                                output = outputs[i*2][j].tolist()
+                                best = (output, prob)
+
+                    output = best[0]
+                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output])
+                    src = " ".join([tf.compat.as_str(rev_en_vocab[o]) for o in en_tokens])
+                    ref = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in fr_tokens])
+
+                    sf.write(src+"\n")
+                    xf.write(trs+"\n")
+                    rf.write(ref+"\n")
+                    sf.flush()
+                    xf.flush()
+                    rf.flush()
+                i += 1
+                if i % 10 == 0:
+                    sys.stdout.write("\r%.1f%%" % ((i*100.0) / size))
+                    sys.stdout.flush()
+        print("")
+        print("DONE!")
 
 
 def self_test():
@@ -239,6 +299,8 @@ def self_test():
 def main(_):
     if FLAGS.self_test:
         self_test()
+    elif FLAGS.test:
+        decode_testset()
     elif FLAGS.decode:
         decode()
     else:
