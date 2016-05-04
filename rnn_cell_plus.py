@@ -203,7 +203,7 @@ class ControllerWrapper(RNNCell):
         inner_state = None
         if self._cell.state_size:
             inner_state = tf.slice(state, [0, self._controller_cell.state_size], [-1, self._cell.state_size])
-        inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size],[-1,-1])
+        inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size], [-1,-1])
         inputs = tf.concat(1, [inputs, inner_out])
         ctr_out, ctr_state = self._controller_cell(inputs, ctr_state)
         inner_out, inner_state = self._cell(ctr_out, inner_state)
@@ -234,14 +234,9 @@ class ControllerWrapper(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
-    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=0, share=False, rng=None):
-        AssociativeGRUCell.__init__(self, num_units, num_copies=num_copies, input_size=input_size,
-                                    num_read_keys=num_read_keys, read_only=False, rng=rng)
-        self._share = share
-
     @property
     def state_size(self):
-        return self._num_units * (self._num_copies*2)
+        return self._num_units * self._num_copies * 2
 
     @property
     def output_size(self):
@@ -259,8 +254,6 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             read_mem = tf.slice(state, [0, self._num_units * self._num_copies], [-1, -1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                if self._share:
-                    tf.get_variable_scope().reuse_variables()
                 key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
@@ -288,19 +281,19 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 h2 = uncomplexify(self._read(conj_w_key, complexify(read_mem)), "retrieved")
 
             with vs.variable_scope("Gates"):
-                if self._share:
-                    tf.get_variable_scope().reuse_variables()
                 gs = linear(r_hs + [inputs, h], 2 * self._num_units, True, 1.0)
             with vs.variable_scope("DualGates"):
+                vs.get_variable_scope()._reuse = \
+                    any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())
                 gs = sigmoid(gs + linear([h2], 2 * self._num_units, False))
             r, u = tf.split(1, 2, gs)
 
             with vs.variable_scope("Candidate"):
-                if self._share:
-                    tf.get_variable_scope().reuse_variables()
                 c = linear(r_hs + [inputs, r * h], self._num_units, True)
 
             with vs.variable_scope("DualCandidate"):
+                vs.get_variable_scope()._reuse = \
+                    any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())  # HACK
                 c = tanh(c + linear([h2], self._num_units, False))
 
             to_add = u * (c - h)

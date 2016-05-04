@@ -69,7 +69,7 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == "AssociativeGRU":
                 cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
                                            rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size, share=True,
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
                                                rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
                 cellA = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellA)
                 cellB = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellB)
@@ -390,7 +390,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 tf.get_variable_scope().reuse_variables()
             if cellB.state_size > cellA.state_size:
                 rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
-                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size])
                 s = tf.concat(1, [rest_state, s])
             h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
