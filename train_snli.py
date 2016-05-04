@@ -346,23 +346,23 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                                         trainable=False)
 
         def create_embeddings():
-            with tf.device("/cpu:0"):
-                E = None
-                if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
-                    E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
-                if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
-                    E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
-                    if E is not None:
-                        E = tf.concat(0, [E_tune, E])
-                    else:
-                        E = E_tune
+            #with tf.device("/cpu:0"):
+            E = None
+            if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
+                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
+            if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
+                E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
+                if E is not None:
+                    E = tf.concat(0, [E_tune, E])
+                else:
+                    E = E_tune
             return E
 
         def my_rnn(ids, cell, lengths, E=None, additional_inputs=None, rev=False, init_state=None):
             inp = None
             if ids is not None:
-                with tf.device("/cpu:0"):
-                    inp = tf.nn.embedding_lookup(E, ids)
+                #with tf.device("/cpu:0"):
+                inp = tf.nn.embedding_lookup(E, ids)
                 if additional_inputs is not None:
                     inp = tf.concat(2, [inp, additional_inputs])
             else:
