@@ -388,6 +388,10 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
             if not isinstance(cellA, ControllerWrapper):
                 tf.get_variable_scope().reuse_variables()
+            if cellB.state_size > cellA.state_size:
+                rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
+                s = tf.concat(1, [rest_state, s])
             h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
 
