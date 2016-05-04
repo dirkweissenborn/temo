@@ -766,7 +766,6 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
                     else:
                         s = math_ops.reduce_sum(v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
                     a = nn_ops.softmax(s + mask)
-                    #a = tf.Print(a, [a, mask, attention_length], "Attention Weights")
                     # Now calculate the attention-weighted vector d.
                     d = math_ops.reduce_sum(
                         array_ops.reshape(a, tf.pack([-1, attn_length, 1, 1])) * hidden,
@@ -776,10 +775,6 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
 
         outputs = []
         batch_attn_size = array_ops.pack([batch_size, attn_size])
-        attns = [array_ops.zeros(batch_attn_size, dtype=dtype)
-                 for _ in xrange(num_heads)]
-        for a in attns:  # Ensure the second shape of attention vectors is set.
-            a.set_shape([None, attn_size])
 
         if decoder_length is not None:
             decoder_length = math_ops.to_int32(decoder_length)
@@ -790,6 +785,15 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             min_sequence_length = math_ops.reduce_min(decoder_length)
             max_sequence_length = math_ops.reduce_max(decoder_length)
 
+        attns = None
+        if initial_state_attention:
+            attns = attention(state)
+        else:
+            attns = [array_ops.zeros(batch_attn_size, dtype=dtype)
+                 for _ in xrange(num_heads)]
+            for a in attns:  # Ensure the second shape of attention vectors is set.
+                a.set_shape([None, attn_size])
+
         prev = None
         HACK_ATTNS = [attns]
         for time, inp in enumerate(decoder_inputs):
@@ -799,16 +803,21 @@ def attention_decoder(decoder_inputs, decoder_length,  initial_state, attention_
             if time > 0: tf.get_variable_scope().reuse_variables()
             # pylint: disable=cell-var-from-loop
             def call_cell():
+                # Concat input and previous attentions into one vector
+                x = tf.concat(1, [inp] + HACK_ATTNS[0])
+                cell_output, cell_state = cell(x, state)
+
                 # Run the attention mechanism.
                 if time == 0 and initial_state_attention:
                     with variable_scope.variable_scope(variable_scope.get_variable_scope(), reuse=True):
-                        HACK_ATTNS[0] = attention(state)
+                        HACK_ATTNS[0] = attention(cell_state)
                 else:
-                    HACK_ATTNS[0] = attention(state)
-                # Concat input and previous attentions into one vector
-                x = tf.concat(1, [inp] + HACK_ATTNS[0])
+                    HACK_ATTNS[0] = attention(cell_state)
 
-                return cell(x, state)
+                with variable_scope.variable_scope("AttnOutputProjection"):
+                    output = rnn_cell.linear([cell_output] + HACK_ATTNS[0], 2*output_size, True)
+                    output = tf.reduce_max(tf.reshape(output, [-1, 2, output_size]), [1], keep_dims=False)
+                return output, cell_state
 
             # pylint: enable=cell-var-from-loop
             if decoder_length is not None:

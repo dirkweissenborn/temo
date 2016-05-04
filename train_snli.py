@@ -1,7 +1,7 @@
 import util
 import nltk
 import numpy as np
-from moru_cell import *
+from rnn_cell_plus import *
 import random
 from sklearn.utils import shuffle
 import os
@@ -55,7 +55,6 @@ def training(embeddings, FLAGS):
             tf.set_random_seed(rng.randint(0, 10000))
             rng2 = random.Random(rng.randint(0, 10000))
 
-            input_size = embedding_size
             cellA = cellB = None
             if FLAGS.cell == 'LSTM':
                 cellA = cellB = BasicLSTMCell(mem_size, embedding_size)
@@ -66,12 +65,14 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, embedding_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size,
+                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
                                            rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=input_size, share=True,
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size, share=True,
                                                rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
+                cellA = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellA)
+                cellB = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellB)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -379,39 +380,15 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             #last_out = tf.reduce_sum(tf.pack(outs), [0]) / tf.cast(tf.reshape(tf.tile(lengths, [cell.output_size]), [-1, cell.output_size]) , tf.float32)
             return last_out, final_state, outs
 
-        if isinstance(cellA, AssociativeGRUCell):
-            print("Use AssociativeGRU")
-            E = create_embeddings()
-            if keep_prob < 1.0:
-                cellA = DropoutWrapper(cellA, keep_prob_var)
-                cellB = DropoutWrapper(cellB, keep_prob_var)
-
-            with tf.variable_scope("assoc_m", initializer=initializer):
-
-                _, c, outsP = my_rnn(idsA, cellA, lengthsA, E)
-
-                if cellB.state_size > cellA.state_size:
-                    rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
-                    rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size + cellA.output_size])
-                    c = tf.concat(1, [rest_state, c])
-                _, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=c)
-
-            with tf.variable_scope("accumulator", initializer=initializer):
-                p, _, outsP = my_rnn(None, GRUCell(cellA.output_size, cellA.output_size),
-                                     lengthsA, additional_inputs=tf.pack(outsP))
+        if keep_prob < 1.0:
+            cellA = DropoutWrapper(cellA, keep_prob_var)
+            cellB = DropoutWrapper(cellB, keep_prob_var)
+        E = create_embeddings()
+        with tf.variable_scope("rnn", initializer=initializer):
+            p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
+            if not isinstance(cellA, ControllerWrapper):
                 tf.get_variable_scope().reuse_variables()
-                h, _, outsH = my_rnn(None, GRUCell(cellA.output_size, cellB.output_size),
-                                     lengthsB, additional_inputs=tf.pack(outsH), init_state=p)
-
-        else:
-            if keep_prob < 1.0:
-                cellA = DropoutWrapper(cellA, keep_prob_var)
-                cellB = DropoutWrapper(cellB, keep_prob_var)
-            E = create_embeddings()
-            with tf.variable_scope("rnn", initializer=initializer):
-                p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
-                tf.get_variable_scope().reuse_variables()
-                h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
+            h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
 
         h = tf.concat(1, [p, h, tf.abs(p-h)])

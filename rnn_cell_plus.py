@@ -117,7 +117,7 @@ class AssociativeGRUCell(RNNCell):
 
     @property
     def state_size(self):
-        return self._num_units * (self._num_copies+1)
+        return self._num_units * self._num_copies
 
     def __call__(self, inputs, state, scope=None):
         with vs.variable_scope(scope or "AssociativeGRUCell"):
@@ -126,11 +126,11 @@ class AssociativeGRUCell(RNNCell):
                     perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            old_h = tf.slice(state, [0, 0], [-1, self._num_units])
-            old_ss = tf.slice(state, [0, self._num_units], [-1,-1])
+            #old_h = tf.slice(state, [0, 0], [-1, self._num_units])
+            old_ss = state
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs, old_h], (1+self._num_read_keys)*self._num_units, False)))
+                key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
                     if self._num_read_keys > 0:
@@ -172,7 +172,7 @@ class AssociativeGRUCell(RNNCell):
                 new_h = h
                 new_ss = old_ss
 
-        return new_h, tf.concat(1, [new_h, new_ss])
+        return new_h, new_ss
 
     def _read(self, keys, redundant_states):
         read = _comp_mul(keys, redundant_states)
@@ -181,6 +181,55 @@ class AssociativeGRUCell(RNNCell):
             xs_imag = tf.split(1, self._num_copies, _comp_imag(read))
             read = (tf.add_n(xs_real)/self._num_copies, tf.add_n(xs_imag)/self._num_copies)
         return read
+
+
+class ControllerWrapper(RNNCell):
+
+    def __init__(self, controller_cell, cell, output_proj=None, out_size=None):
+        self._cell = cell
+        self._controller_cell = controller_cell
+        self._output_proj = output_proj
+        self._out_size = out_size
+
+    @property
+    def output_size(self):
+        if self._out_size is None:
+            return self._controller_cell.output_size + self._cell.output_size
+        else:
+            return self._out_size
+
+    def __call__(self, inputs, state, scope=None):
+        ctr_state = tf.slice(state, [0, 0], [-1,self._controller_cell.state_size])
+        inner_state = None
+        if self._cell.state_size:
+            inner_state = tf.slice(state, [0, self._controller_cell.state_size], [-1, self._cell.state_size])
+        inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size],[-1,-1])
+        inputs = tf.concat(1, [inputs, inner_out])
+        ctr_out, ctr_state = self._controller_cell(inputs, ctr_state)
+        inner_out, inner_state = self._cell(ctr_out, inner_state)
+        out = tf.concat(1, [ctr_out, inner_out])
+        if self._output_proj is not None:
+            with tf.variable_scope("Output_Projection"):
+                out = self._output_proj(out, self.output_size)
+        if self._cell.state_size:
+            return out, tf.concat(1, [ctr_state, inner_state, inner_out])
+        else:
+            return out, tf.concat(1, [ctr_state, inner_out])
+
+    def zero_state(self, batch_size, dtype):
+        if self._cell.state_size:
+            return tf.concat(1, [self._controller_cell.zero_state(), self._cell.zero_state(),
+                             tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+        else:
+            return tf.concat(1, [self._controller_cell.zero_state(), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+
+    @property
+    def input_size(self):
+        return self._controller_cell.input_size
+
+    @property
+    def state_size(self):
+        return self._controller_cell.state_size + self._cell.state_size + self._cell.output_size
 
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
@@ -192,7 +241,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
 
     @property
     def state_size(self):
-        return self._num_units * (self._num_copies*2+1)
+        return self._num_units * (self._num_copies*2)
 
     @property
     def output_size(self):
@@ -205,14 +254,14 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                     perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            old_h = tf.slice(state, [0, 0], [-1, self._num_units])
-            old_ss = tf.slice(state, [0, self._num_units], [-1, self._num_units * self._num_copies])
-            read_mem = tf.slice(state, [0, self._num_units * (self._num_copies+1)], [-1, -1])
+            #old_h = tf.slice(state, [0, 0], [-1, self._num_units])
+            old_ss = tf.slice(state, [0, 0], [-1, self._num_units * self._num_copies])
+            read_mem = tf.slice(state, [0, self._num_units * self._num_copies], [-1, -1])
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 if self._share:
                     tf.get_variable_scope().reuse_variables()
-                key = bound(complexify(linear([inputs, old_h], (1+self._num_read_keys)*self._num_units, False)))
+                key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
                     if self._num_read_keys > 0:
@@ -260,7 +309,78 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             new_ss = old_ss + uncomplexify(_comp_mul(w_key, c_to_add))
             new_h = tf.add(h, to_add, "out")
 
-        return new_h, tf.concat(1, [new_h, new_ss, read_mem])
+        return new_h, tf.concat(1, [new_ss, read_mem])
+
+
+#use with controller
+class AttentionCell(RNNCell):
+
+    def __init__(self, attention_states, attention_length, input_size=None, num_heads=1):
+        self._attention_states = attention_states
+        self._attention_length = attention_length
+        self._num_heads = num_heads
+        self._hidden_features = None
+        self._num_units = self._attention_states.get_shape()[2].value
+        self._input_size = input_size if input_size is not None else self._num_units
+
+    @property
+    def output_size(self):
+        return self._attention_states.get_shape()[2].value * self._num_heads
+
+    def __call__(self, inputs, state, scope=None):
+        if self._hidden_features is None:
+            self._attn_length = math_ops.reduce_max(self._attention_length)
+            attention_states = tf.slice(self._attention_states, [0,0,0], tf.pack([-1, self._attn_length, -1]))
+            # To calculate W1 * h_t we use a 1-by-1 convolution, need to reshape before.
+            self._hidden = array_ops.reshape(attention_states, tf.pack([-1, self._attn_length, 1, self._num_units]))
+            hidden_features = []
+
+            for a in range(self._num_heads):
+                k = tf.get_variable("AttnW_%d" % a, [1, 1, self._num_units, self._num_units])
+                hidden_features.append(nn_ops.conv2d(self._hidden, k, [1, 1, 1, 1], "SAME"))
+            self._hidden_features = hidden_features
+
+
+        ds = []  # Results of attention reads will be stored here.
+
+        batch_size = tf.shape(inputs)[0]
+        mask = tf.tile(tf.reshape(tf.lin_space(1.0, tf.cast(self._attn_length, tf.float32), self._attn_length), [1, -1]),
+                       tf.pack([batch_size, 1]))
+        batch_size_scale = batch_size // tf.shape(self._attention_length)[0] # used in decoding
+        lengths = tf.tile(tf.expand_dims(tf.cast(self._attention_length, tf.float32), 1),
+                          tf.pack([batch_size_scale, self._attn_length]))
+
+        mask = tf.cast(tf.greater(mask, lengths), tf.float32) * -1000.0
+        for a in range(self._num_heads):
+            with tf.variable_scope("Attention_%d" % a):
+                y = linear(inputs, self._num_units, True)
+                y = array_ops.reshape(y, [-1, 1, 1, self._num_units])
+                # Attention mask is a softmax of v^T * tanh(...).
+                v = tf.get_variable("AttnV_%d" % a, [self._num_units])
+                hf = tf.cond(tf.equal(batch_size_scale,1),
+                             lambda: self._hidden_features[a],
+                             lambda: tf.tile(self._hidden_features[a], tf.pack([batch_size_scale,1,1,1])))
+                s = math_ops.reduce_sum(v * math_ops.tanh(hf + y), [2, 3])
+
+                a = nn_ops.softmax(s + mask)
+                # Now calculate the attention-weighted vector d.
+                d = math_ops.reduce_sum(
+                    array_ops.reshape(a, tf.pack([-1, self._attn_length, 1, 1])) * self._hidden,
+                    [1, 2])
+                ds.append(array_ops.reshape(d, [-1, self._num_units]))
+
+        return tf.concat(1, ds), None
+
+    def zero_state(self, batch_size, dtype):
+        return super().zero_state(batch_size, dtype)
+
+    @property
+    def input_size(self):
+        return self._input_size
+
+    @property
+    def state_size(self):
+        return 0
 
 
 def complexify(v, name=None):

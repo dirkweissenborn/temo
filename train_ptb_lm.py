@@ -1,4 +1,4 @@
-from moru_cell import *
+from rnn_cell_plus import *
 import numpy as np
 import random
 import time

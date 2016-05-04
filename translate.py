@@ -208,7 +208,6 @@ def decode():
                 model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
             # Get output symbols for the sentence.
             outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
-            print(outputs)
             for i in range(len(outputs) // 2):
                 for j in range(outputs[i*2].shape[0]):
                     output = outputs[i*2][j].tolist()
@@ -280,11 +279,11 @@ def decode_testset():
 
 def self_test():
     """Test the translation model."""
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,log_device_placement=True)) as sess:
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         print("Self-test for neural translation model.")
         # Create model with vocabularies of 10, 2 layers of 32.
         with tf.device(FLAGS.device):
-            model = translation_model.TranslationModel(10, 10, 6, 32, 2,
+            model = translation_model.TranslationModel(10, 10, 6, 32, 1,
                                                        5.0, 32, 0.3, 0.99, num_samples=8,
                                                        cell_type=FLAGS.cell_type, attention=FLAGS.attention)
         sess.run(tf.initialize_all_variables())

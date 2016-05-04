@@ -1,5 +1,5 @@
 import util
-from moru_cell import *
+from rnn_cell_plus import *
 import random
 from sklearn.utils import shuffle
 from tensorflow.python.ops.rnn import rnn

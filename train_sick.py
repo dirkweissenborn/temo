@@ -1,7 +1,7 @@
 import util
 import nltk
 import numpy as np
-from moru_cell import *
+from rnn_cell_plus import *
 import random
 from sklearn.utils import shuffle
 from sklearn.metrics import mean_squared_error as mse
