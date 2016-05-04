@@ -179,7 +179,7 @@ class TranslationModel(object):
                             return output
                         dec_cell = ControllerWrapper(ctr_cell, AttentionCell(encoder_states, encoder_length, size), outproj, size)
 
-                        c = tf.concat(1, [c, tf.zeros([batch_size, dec_cell.state_size-ctr_cell.state_size])])
+                        c = tf.concat(1, [c, tf.zeros([batch_size, dec_cell.state_size-enc_cell.state_size])])
 
                         # Decoder.
                         return my_seq2seq.embedding_rnn_decoder(
