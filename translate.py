@@ -247,7 +247,7 @@ def decode_testset():
             for (en_tokens, fr_tokens) in test_set:
                 if not FLAGS.no_unk or data_utils.UNK_ID not in en_tokens:
                     encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
-                                                                                                            max(max_length, 2 * len(en_tokens)))])
+                                                                                                            min(max_length, 2 * len(en_tokens)))])
 
                     outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
                     best = (None, -float("inf"))
