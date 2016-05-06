@@ -216,7 +216,7 @@ def decode():
                     #if data_utils.EOS_ID in outputs:
                     #    output = output[:output.index(data_utils.EOS_ID)]
                     # Print out French sentence corresponding to outputs.
-                    print("%s (%.3f)" % (" ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output]), prob))
+                    print("%s (%.3f)" % (" ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output[:-1]]), prob))
             print("> ", end="")
             sys.stdout.flush()
             sentence = sys.stdin.readline()
@@ -245,10 +245,9 @@ def decode_testset():
         with open(src_file, 'w') as sf, open(ref_file, 'w') as rf, open(trs_file, 'w') as xf:
             i = 0
             for (en_tokens, fr_tokens) in test_set:
-                if not FLAGS.no_unk or data_utils.UNK_ID not in en_tokens:
+                if not FLAGS.no_unk or (data_utils.UNK_ID not in en_tokens and data_utils.UNK_ID not in fr_tokens):
                     encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
                                                                                                             min(max_length, 2 * len(en_tokens)))])
-
                     outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
                     best = (None, -float("inf"))
                     for i in range(len(outputs) // 2):
@@ -259,7 +258,7 @@ def decode_testset():
                                 best = (output, prob)
 
                     output = best[0]
-                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output])
+                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output[:-1]])
                     src = " ".join([tf.compat.as_str(rev_en_vocab[o]) for o in en_tokens])
                     ref = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in fr_tokens])
 

@@ -153,9 +153,14 @@ def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=N
             #symbols = tf.Print(symbols, [beam_parent, symbols], "beam_parent")
             sequences.append(tf.reshape(symbols, [-1, 1]))
 
+        num_probs = tf.shape(probs)[0]
+        zero_emit = tf.zeros([0],tf.int32)
+        zero_prob = tf.zeros([0,1],tf.float32)
+
         to_emit_idx = tf.squeeze(tf.where(tf.equal(symbols, data_utils.EOS_ID)), [1])
-        to_emit = tf.gather(sequences[-1], to_emit_idx)
-        emit_probs = tf.gather(best_probs, to_emit_idx)
+        to_emit, emit_probs = tf.cond(tf.Print(tf.equal(num_probs, 0),[tf.equal(num_probs, 0)]),
+                                      lambda: (zero_emit, zero_prob),
+                                      lambda: (tf.gather(sequences[-1], to_emit_idx), tf.gather(best_probs, to_emit_idx)))
         emit.append(to_emit)
         emit.append(tf.squeeze(emit_probs, [1]))
 
@@ -170,7 +175,10 @@ def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=N
         new_state = tf.reshape(new_state, [-1, state_size])
         emb_prev = tf.reshape(emb_prev, [-1, size])
 
-        return new_state, emb_prev
+        zero_out = tf.zeros([0, size])
+        return tf.cond(tf.equal(num_probs, 0),
+                       lambda: (state, zero_out),
+                       lambda: (new_state, emb_prev))
 
     return loop_function, emit
 
@@ -290,7 +298,7 @@ def my_rnn(cell, inputs, initial_state=None, dtype=None,
         return (outputs, state)
 
 
-def rnn_decoder(decoder_inputs, sequence_length, initial_state, cell, loop_function=None,
+def rnn_decoder(decoder_inputs, decoder_length, initial_state, cell, loop_function=None,
                 scope=None):
     """RNN decoder for the sequence-to-sequence model.
 
@@ -340,13 +348,13 @@ def rnn_decoder(decoder_inputs, sequence_length, initial_state, cell, loop_funct
 
         state = initial_state
 
-        if sequence_length is not None:
-            sequence_length = math_ops.to_int32(sequence_length)
+        if decoder_length is not None:
+            decoder_length = math_ops.to_int32(decoder_length)
 
-        if sequence_length is not None:  # Prepare variables
+        if decoder_length is not None:  # Prepare variables
             zero_output = tf.zeros(tf.pack([batch_size, cell.output_size]), initial_state.dtype)
-            min_sequence_length = math_ops.reduce_min(sequence_length)
-            max_sequence_length = math_ops.reduce_max(sequence_length)
+            min_sequence_length = math_ops.reduce_min(decoder_length)
+            max_sequence_length = math_ops.reduce_max(decoder_length)
 
         prev = None
         for time, inp in enumerate(decoder_inputs):
@@ -357,10 +365,13 @@ def rnn_decoder(decoder_inputs, sequence_length, initial_state, cell, loop_funct
             # pylint: disable=cell-var-from-loop
             call_cell = lambda: cell(inp, state)
             # pylint: enable=cell-var-from-loop
-            if sequence_length is not None:
-                (output, state) = rnn._rnn_step(
-                    time, sequence_length, min_sequence_length, max_sequence_length,
-                    zero_output, state, call_cell)
+            if decoder_length is not None:
+                inp_batch_size = tf.shape(inp)[0]
+                (output, state) = tf.cond(tf.equal(inp_batch_size, 0),
+                            lambda:(zero_output, state),
+                            lambda: rnn._rnn_step(
+                                    time, decoder_length, min_sequence_length, max_sequence_length,
+                                    zero_output, state, call_cell))
             else:
                 (output, state) = call_cell()
             outputs.append(output)

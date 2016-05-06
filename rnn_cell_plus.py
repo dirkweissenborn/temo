@@ -218,10 +218,10 @@ class ControllerWrapper(RNNCell):
 
     def zero_state(self, batch_size, dtype):
         if self._cell.state_size > 0:
-            return tf.concat(1, [self._controller_cell.zero_state(), self._cell.zero_state(),
+            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), self._cell.zero_state(batch_size, dtype),
                              tf.zeros([batch_size,self._cell.output_size]),tf.float32])
         else:
-            return tf.concat(1, [self._controller_cell.zero_state(), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
 
     @property
     def input_size(self):
@@ -230,6 +230,51 @@ class ControllerWrapper(RNNCell):
     @property
     def state_size(self):
         return self._controller_cell.state_size + self._cell.state_size + self._cell.output_size
+
+
+class SelfControllerWrapper(RNNCell):
+
+    def __init__(self, cell, input_size, output_proj=None, out_size=None):
+        self._cell = cell
+        self._output_proj = output_proj
+        self._input_size = input_size
+        self._out_size = out_size
+
+    @property
+    def output_size(self):
+        if self._out_size is None:
+            return self._cell.output_size
+        else:
+            return self._out_size
+
+    def __call__(self, inputs, state, scope=None):
+        inner_state = None
+        if self._cell.state_size > 0:
+            inner_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
+        inner_out = tf.slice(state, [0, self._cell.state_size], [-1,-1])
+        inputs = tf.concat(1, [inputs, inner_out])
+        out, inner_state = self._cell(inputs, inner_state)
+        if self._output_proj is not None:
+            with tf.variable_scope("Output_Projection"):
+                out = self._output_proj(out, self.output_size)
+        if self._cell.state_size > 0:
+            return out, tf.concat(1, [inner_state, inner_out])
+        else:
+            return out, inner_out
+
+    def zero_state(self, batch_size, dtype):
+        if self._cell.state_size > 0:
+            return tf.concat(1, [self._cell.zero_state(batch_size, dtype), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+        else:
+            return tf.zeros([batch_size,self._cell.output_size]),tf.float32
+
+    @property
+    def input_size(self):
+        return self._input_size
+
+    @property
+    def state_size(self):
+        return self._cell.state_size + self._cell.output_size
 
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
