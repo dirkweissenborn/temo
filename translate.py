@@ -243,7 +243,7 @@ def decode_testset():
         print("Start decoding test file to %s!" % FLAGS.decode_out)
         size = len(test_set)
         with open(src_file, 'w') as sf, open(ref_file, 'w') as rf, open(trs_file, 'w') as xf:
-            i = 0
+            k = 0
             for (en_tokens, fr_tokens) in test_set:
                 if not FLAGS.no_unk or (data_utils.UNK_ID not in en_tokens and data_utils.UNK_ID not in fr_tokens):
                     encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
@@ -255,10 +255,17 @@ def decode_testset():
                             prob = outputs[i*2+1][j]
                             if prob > best[1]:
                                 output = outputs[i*2][j].tolist()
+                                if output[-1] == data_utils.EOS_ID:
+                                    best = (output, prob)
+                    if best[0] is None:
+                        # take the best of the longest sequence if no EOS was produced
+                        for j in range(outputs[-2].shape[0]):
+                            prob = outputs[-1][j]
+                            if prob > best[1]:
+                                output = outputs[-2][j].tolist()
                                 best = (output, prob)
-
-                    output = best[0]
-                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output[:-1]])
+                    output = best[0][:-1]
+                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output])
                     src = " ".join([tf.compat.as_str(rev_en_vocab[o]) for o in en_tokens])
                     ref = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in fr_tokens])
 
@@ -268,9 +275,9 @@ def decode_testset():
                     sf.flush()
                     xf.flush()
                     rf.flush()
-                i += 1
-                if i % 10 == 0:
-                    sys.stdout.write("\r%.1f%%" % ((i*100.0) / size))
+                k += 1
+                if k % 10 == 0:
+                    sys.stdout.write("\r%.1f%%" % ((k*100.0) / size))
                     sys.stdout.flush()
         print("")
         print("DONE!")

@@ -130,10 +130,13 @@ def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=N
         if log_beam_probs:
             probs = tf.reshape(probs + log_beam_probs[-1], [-1])
 
+        num_probs = tf.shape(probs)[0]
         # Get the top `beam_size` candidates and reshape them such
         # that the number of rows = batch_size * beam_size, which
         # allows us to process each hypothesis independently.
-        best_probs, indices = tf.nn.top_k(probs, beam_size)
+        best_probs, indices = tf.cond(tf.equal(num_probs, 0),
+                                      lambda: (tf.zeros([0], tf.float32), tf.zeros([0], tf.int32)),
+                                      lambda: tf.nn.top_k(probs, beam_size))
         indices = tf.stop_gradient(tf.squeeze(tf.reshape(indices, [-1, 1])))
         best_probs = tf.stop_gradient(tf.reshape(best_probs, [-1, 1]))
 
@@ -153,14 +156,13 @@ def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=N
             #symbols = tf.Print(symbols, [beam_parent, symbols], "beam_parent")
             sequences.append(tf.reshape(symbols, [-1, 1]))
 
-        num_probs = tf.shape(probs)[0]
         zero_emit = tf.zeros([0],tf.int32)
         zero_prob = tf.zeros([0,1],tf.float32)
 
         to_emit_idx = tf.squeeze(tf.where(tf.equal(symbols, data_utils.EOS_ID)), [1])
-        to_emit, emit_probs = tf.cond(tf.Print(tf.equal(num_probs, 0),[tf.equal(num_probs, 0)]),
+        to_emit, emit_probs = tf.cond(tf.equal(num_probs, 0),
                                       lambda: (zero_emit, zero_prob),
-                                      lambda: (tf.gather(sequences[-1], to_emit_idx), tf.gather(best_probs, to_emit_idx)))
+                                      lambda: (sequences[-1], best_probs))
         emit.append(to_emit)
         emit.append(tf.squeeze(emit_probs, [1]))
 
