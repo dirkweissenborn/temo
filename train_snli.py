@@ -67,12 +67,12 @@ def training(embeddings, FLAGS):
                 ops = FLAGS.moru_ops.split(",")
                 cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, embedding_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
+                cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size+embedding_size,
                                            rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
-                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
+                cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size+embedding_size,
                                                rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
-                cellA = SelfControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellA)
-                cellB = SelfControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellB)
+                cellA = SelfControllerWrapper(cellA, embedding_size)
+                cellB = SelfControllerWrapper(cellB, embedding_size)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
