@@ -45,6 +45,7 @@ tf.app.flags.DEFINE_string("cell_type", "GRU", "Type of cell to use.")
 tf.app.flags.DEFINE_integer("max_train_data_size", 0,
                             "Limit on the size of training data (0: no limit).")
 tf.app.flags.DEFINE_integer("max_length", 50, "limit length of sentences.")
+tf.app.flags.DEFINE_integer("min_length", 0, "limit length of sentences.")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 200,
                             "How many training steps to do per checkpoint.")
 tf.app.flags.DEFINE_boolean("decode", False, "Set to True for interactive decoding.")
@@ -59,7 +60,7 @@ tf.app.flags.DEFINE_string("decode_out", "/tmp/decoded", "Directory of decoding 
 FLAGS = tf.app.flags.FLAGS
 
 
-def read_data(source_path, target_path, max_length, max_size=None):
+def read_data(source_path, target_path, max_length, min_length=0, max_size=None):
     """Read data from source and target files and put into buckets.
     Args:
       source_path: path to the files with token-ids for the source language.
@@ -85,7 +86,9 @@ def read_data(source_path, target_path, max_length, max_size=None):
                 source_ids = [int(x) for x in source.split()]
                 target_ids = [int(x) for x in target.split()]
                 target_ids.append(data_utils.EOS_ID)
-                if source_ids and target_ids and len(source_ids) < max_length and len(target_ids) < max_length:
+                if source_ids and target_ids and \
+                                len(source_ids) < max_length and len(target_ids) < max_length and \
+                                len(source_ids) >= min_length:
                     counter += 1
                     if counter % 100000 == 0:
                         print("  reading data line %d" % counter)
@@ -128,8 +131,8 @@ def train():
         # Read data.
         print("Reading development and training data (limit: %d)."
                % FLAGS.max_train_data_size)
-        dev_set, max_length = read_data(en_dev, fr_dev, FLAGS.max_length)
-        train_set, l = read_data(en_train, fr_train, FLAGS.max_length, FLAGS.max_train_data_size)
+        dev_set, max_length = read_data(en_dev, fr_dev, FLAGS.max_length, FLAGS.min_length)
+        train_set, l = read_data(en_train, fr_train, FLAGS.max_length, FLAGS.min_length, FLAGS.max_train_data_size)
         max_length = max(l, max_length)
         train_total_size = len(train_set)
 
@@ -228,7 +231,7 @@ def decode_testset():
     en_vocab, rev_en_vocab = data_utils.initialize_vocabulary(en_vocab_path)
     _, rev_fr_vocab = data_utils.initialize_vocabulary(fr_vocab_path)
 
-    test_set, max_length = read_data(en_test, fr_test, FLAGS.max_length)
+    test_set, max_length = read_data(en_test, fr_test, FLAGS.max_length, FLAGS.min_length)
     if not os.path.exists(FLAGS.decode_out):
         os.mkdir(FLAGS.decode_out)
     src_file = os.path.join(FLAGS.decode_out, "src.txt")

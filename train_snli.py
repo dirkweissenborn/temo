@@ -71,8 +71,8 @@ def training(embeddings, FLAGS):
                                            rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
                 cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size,
                                                rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
-                cellA = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellA)
-                cellB = ControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellB)
+                cellA = SelfControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellA)
+                cellB = SelfControllerWrapper(GRUCell(mem_size, embedding_size+mem_size), cellB)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
@@ -387,14 +387,18 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             cellB = DropoutWrapper(cellB, keep_prob_var)
         E = create_embeddings()
         with tf.variable_scope("rnn", initializer=initializer):
-            p, s, _ = my_rnn(idsA, cellA, lengthsA, E)
-            if not isinstance(cellA, ControllerWrapper):
-                tf.get_variable_scope().reuse_variables()
+            p, s, outsP = my_rnn(idsA, cellA, lengthsA, E)
+            tf.get_variable_scope().reuse_variables()
             if cellB.state_size > cellA.state_size:
                 rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
                 rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size])
                 s = tf.concat(1, [rest_state, s])
-            h, _, _ = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
+            h, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
+
+        with tf.variable_scope("accum", initializer=initializer):
+            p, s, _ = my_rnn(None, GRUCell(h_size, cellA.output_size), lengthsA, E, additional_inputs=outsP)
+            tf.get_variable_scope().reuse_variables()
+            h, _, _ = my_rnn(None, GRUCell(h_size, cellB.output_size), lengthsB, E, init_state=s, additional_inputs=outsH)
 
 
         h = tf.concat(1, [p, h, tf.abs(p-h)])
