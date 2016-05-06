@@ -396,9 +396,9 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             h, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
         with tf.variable_scope("accum", initializer=initializer):
-            p, s, _ = my_rnn(None, GRUCell(h_size, cellA.output_size), lengthsA, E, additional_inputs=outsP)
+            p, s, _ = my_rnn(None, GRUCell(h_size, cellA.output_size), lengthsA, E, additional_inputs=tf.pack(outsP))
             tf.get_variable_scope().reuse_variables()
-            h, _, _ = my_rnn(None, GRUCell(h_size, cellB.output_size), lengthsB, E, init_state=s, additional_inputs=outsH)
+            h, _, _ = my_rnn(None, GRUCell(h_size, cellB.output_size), lengthsB, E, init_state=s, additional_inputs=tf.pack(outsH))
 
 
         h = tf.concat(1, [p, h, tf.abs(p-h)])
