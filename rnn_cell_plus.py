@@ -248,19 +248,20 @@ class SelfControllerWrapper(RNNCell):
             return self._out_size
 
     def __call__(self, inputs, state, scope=None):
-        inner_state = None
+        prev_state = None
         if self._cell.state_size > 0:
-            inner_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
-        inner_out = tf.slice(state, [0, self._cell.state_size], [-1,-1])
-        inputs = tf.concat(1, [inputs, inner_out])
-        out, inner_state = self._cell(inputs, inner_state)
+            prev_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
+        prev_out = tf.slice(state, [0, self._cell.state_size], [-1,-1])
+        inputs = tf.concat(1, [inputs, prev_out])
+        new_out, prev_state = self._cell(inputs, prev_state)
+        out = new_out
         if self._output_proj is not None:
             with tf.variable_scope("Output_Projection"):
                 out = self._output_proj(out, self.output_size)
         if self._cell.state_size > 0:
-            return out, tf.concat(1, [inner_state, inner_out])
+            return out, tf.concat(1, [prev_state, new_out])
         else:
-            return out, inner_out
+            return out, new_out
 
     def zero_state(self, batch_size, dtype):
         if self._cell.state_size > 0:
