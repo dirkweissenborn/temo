@@ -215,11 +215,12 @@ def decode():
                 for j in range(outputs[i*2].shape[0]):
                     output = outputs[i*2][j].tolist()
                     prob = outputs[i*2+1][j]
-                    # If there is an EOS symbol in outputs, cut them at that point.
-                    #if data_utils.EOS_ID in outputs:
-                    #    output = output[:output.index(data_utils.EOS_ID)]
-                    # Print out French sentence corresponding to outputs.
-                    print("%s (%.3f)" % (" ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output[:-1]]), prob))
+                    if output[-1] == data_utils.EOS_ID:
+                        # If there is an EOS symbol in outputs, cut them at that point.
+                        #if data_utils.EOS_ID in outputs:
+                        #    output = output[:output.index(data_utils.EOS_ID)]
+                        # Print out French sentence corresponding to outputs.
+                        print("%s (%.3f)" % (" ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output]), prob))
             print("> ", end="")
             sys.stdout.flush()
             sentence = sys.stdin.readline()
@@ -259,25 +260,30 @@ def decode_testset():
                             if prob > best[1]:
                                 output = outputs[i*2][j].tolist()
                                 if output[-1] == data_utils.EOS_ID:
-                                    best = (output, prob)
+                                    best = (output[:-1], prob)
                     if best[0] is None:
-                        # take the best of the longest sequence if no EOS was produced
-                        for j in range(outputs[-2].shape[0]):
-                            prob = outputs[-1][j]
-                            if prob > best[1]:
-                                output = outputs[-2][j].tolist()
-                                best = (output, prob)
-                    output = best[0][:-1]
-                    trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in output])
-                    src = " ".join([tf.compat.as_str(rev_en_vocab[o]) for o in en_tokens])
-                    ref = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in fr_tokens])
+                        # take the best of all sequences with similar length as input sequence +-1
+                        for i in range(len(outputs) // 2):
+                            for j in range(outputs[i*2].shape[0]):
+                                prob = outputs[i*2+1][j]
+                                if prob > best[1]:
+                                    output = outputs[i*2][j].tolist()
+                                    if abs(len(output)-len(en_tokens)) < 2:
+                                        best = (output, prob)
 
-                    sf.write(src+"\n")
-                    xf.write(trs+"\n")
-                    rf.write(ref+"\n")
-                    sf.flush()
-                    xf.flush()
-                    rf.flush()
+                    if best[0] is None:
+                        print("Could not translate: ", en_tokens)
+                    else:
+                        trs = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in best[0]])
+                        src = " ".join([tf.compat.as_str(rev_en_vocab[o]) for o in en_tokens])
+                        ref = " ".join([tf.compat.as_str(rev_fr_vocab[o]) for o in fr_tokens[:-1]])
+
+                        sf.write(src+"\n")
+                        xf.write(trs+"\n")
+                        rf.write(ref+"\n")
+                        sf.flush()
+                        xf.flush()
+                        rf.flush()
                 k += 1
                 if k % 10 == 0:
                     sys.stdout.write("\r%.1f%%" % ((k*100.0) / size))
