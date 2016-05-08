@@ -88,19 +88,18 @@ class TranslationModel(object):
                 enc_cell, ctr_cell = None, None
                 if cell_type == "AssociativeGRU":
                     print("Use AssociativeGRU!")
-                    ctr_cell = GRUCell(size, size*2)
-                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size,
+                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=2*size,
                                                   rng=random.Random(123), num_read_keys=num_read_keys)
-                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123),
+                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=2*size, rng=random.Random(123),
                                                       num_read_keys=num_read_keys)
 
-                    enc_cell = ControllerWrapper(ctr_cell, enc_cell)
+                    enc_cell = SelfControllerWrapper(enc_cell, size)
 
                     def outproj(out, out_size):
                         output = linear([out], 2 * out_size, True)
                         output = tf.reduce_max(tf.reshape(output, [-1, 2, out_size]), [1], keep_dims=False)
                         return output
-                    dec_cell = ControllerWrapper(ctr_cell, dec_cell, outproj, size)
+                    dec_cell = SelfControllerWrapper(dec_cell, size, outproj, size)
 
                     inputs = rev_encoder_inputs
                     if num_layers > 1:
