@@ -251,7 +251,7 @@ class SelfControllerWrapper(RNNCell):
         prev_state = None
         if self._cell.state_size > 0:
             prev_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
-        prev_out = tf.slice(state, [0, self._cell.state_size], [-1,-1])
+        prev_out = tf.slice(state, [0, self._cell.state_size], [-1,self._cell.output_size])
         inputs = tf.concat(1, [inputs, prev_out])
         new_out, prev_state = self._cell(inputs, prev_state)
         out = new_out
@@ -265,9 +265,9 @@ class SelfControllerWrapper(RNNCell):
 
     def zero_state(self, batch_size, dtype):
         if self._cell.state_size > 0:
-            return tf.concat(1, [self._cell.zero_state(batch_size, dtype), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+            return tf.concat(1, [self._cell.zero_state(batch_size, dtype), tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)])
         else:
-            return tf.zeros([batch_size,self._cell.output_size]),tf.float32
+            return tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)
 
     @property
     def input_size(self):
@@ -280,9 +280,13 @@ class SelfControllerWrapper(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
+    def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, num_read_keys=0, read_only=False, rng=None):
+        AssociativeGRUCell.__init__(self, num_units, num_copies, input_size, num_read_keys, read_only, rng)
+        self._num_read_mems = num_read_mems
+
     @property
     def state_size(self):
-        return self._num_units * self._num_copies * 2
+        return self._num_units * self._num_copies * (1+self._num_read_mems)
 
     @property
     def output_size(self):
@@ -297,7 +301,8 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
 
             #old_h = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, 0], [-1, self._num_units * self._num_copies])
-            read_mem = tf.slice(state, [0, self._num_units * self._num_copies], [-1, -1])
+            dual_mem = tf.slice(state, [0, self._num_units * self._num_copies], [-1, -1])
+            read_mems = tf.split(1,self._num_read_mems, dual_mem)
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
@@ -324,7 +329,11 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                     r_hs.append(uncomplexify(self._read(k, c_ss), "read_%d" % i))
 
             with vs.variable_scope("Read_Given"):
-                h2 = uncomplexify(self._read(conj_w_key, complexify(read_mem)), "retrieved")
+                if self._num_read_mems > 1:
+                    h2_s = [uncomplexify(self._read(conj_w_key, complexify(read_mem))) for read_mem in read_mems]
+                    h2 = tf.reshape(tf.concat(1, h2_s, name="retrieved"), [-1, self._num_read_mems*self._num_units])
+                else:
+                    h2 = uncomplexify(self._read(conj_w_key, complexify(read_mems[0])), "retrieved")
 
             with vs.variable_scope("Gates"):
                 gs = linear(r_hs + [inputs, h], 2 * self._num_units, True, 1.0)
@@ -348,7 +357,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             new_ss = old_ss + uncomplexify(_comp_mul(w_key, c_to_add))
             new_h = tf.add(h, to_add, "out")
 
-        return new_h, tf.concat(1, [new_ss, read_mem])
+        return new_h, tf.concat(1, [new_ss, dual_mem])
 
 
 #use with controller

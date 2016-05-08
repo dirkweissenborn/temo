@@ -299,7 +299,7 @@ def self_test():
         # Create model with vocabularies of 10, 2 layers of 32.
         with tf.device(FLAGS.device):
             model = translation_model.TranslationModel(10, 10, 6, 32, 1,
-                                                       5.0, 32, 0.3, 0.99, num_samples=8,
+                                                       5.0, 32, 0.3, 0.99,
                                                        cell_type=FLAGS.cell_type, attention=FLAGS.attention)
         sess.run(tf.initialize_all_variables())
 

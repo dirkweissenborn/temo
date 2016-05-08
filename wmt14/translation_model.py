@@ -65,7 +65,6 @@ class TranslationModel(object):
           learning_rate: learning rate to start with.
           learning_rate_decay_factor: decay learning rate by this much when needed.
           use_lstm: if true, we use LSTM cells instead of GRU cells.
-          num_samples: number of samples for sampled softmax.
           forward_only: if set, we do not construct the backward pass in the model.
         """
         self._rng = random.Random(123)
@@ -90,7 +89,7 @@ class TranslationModel(object):
                     print("Use AssociativeGRU!")
                     enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=2*size,
                                                   rng=random.Random(123), num_read_keys=num_read_keys)
-                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=2*size, rng=random.Random(123),
+                    dec_cell = DualAssociativeGRUCell(size, num_read_mems=2, num_copies=8, input_size=2*size, rng=random.Random(123),
                                                       num_read_keys=num_read_keys)
 
                     enc_cell = SelfControllerWrapper(enc_cell, size)
@@ -102,29 +101,30 @@ class TranslationModel(object):
                     dec_cell = SelfControllerWrapper(dec_cell, size, outproj, size)
 
                     inputs = rev_encoder_inputs
-                    if num_layers > 1:
-                        lower_cell = GRUCell(size, size)
-                        if num_layers > 2:
-                            lower_cell = tf.nn.rnn_cell.MultiRNNCell([lower_cell] * (num_layers-1))
-                        lower_cell = EmbeddingWrapper(lower_cell, source_vocab_size, size)
-                        with tf.variable_scope("encoder"):
-                            # Encoder.
-                            with tf.variable_scope("forward"):
-                                encoder_outputs, encoder_state = \
-                                    my_seq2seq.my_rnn(lower_cell, encoder_inputs, sequence_length=encoder_length, dtype=tf.float32)
-                                encoder_outputs = tf.pack(encoder_outputs)
-                        encoder_outputs = tf.reverse_sequence(encoder_outputs, tf.cast(encoder_length, tf.int64), 0, 1)
-                        inputs = tf.split(0, max_length, encoder_outputs)
-                        inputs = [tf.reshape(o, [-1, size]) for o in inputs]
-                    else:
-                        enc_cell = EmbeddingWrapper(enc_cell, source_vocab_size, size)
+                    with tf.variable_scope("encoder"):
+                        with tf.variable_scope("embedding"):
+                            with ops.device("/cpu:0"):
+                                embedding = vs.get_variable("embedding", [source_vocab_size, size])
+                                embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
+                                rev_embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
 
-                    with tf.variable_scope("encoder_top"):
-                        encoder_outputs, c = my_seq2seq.my_rnn(enc_cell, inputs, sequence_length=encoder_length, dtype=tf.float32)
+                        # Encoder.
+                        with tf.variable_scope("forward"):
+                            _, encoder_state = \
+                                my_seq2seq.my_rnn(enc_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
 
-                    if dec_cell.state_size > enc_cell.state_size:
+
+                        with tf.variable_scope("backward"):
+                            _, rev_encoder_state = \
+                                my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
+
+                    c = None
+                    encoder_mem = tf.slice(encoder_state, [0,size],[-1,-1]) #remove output from forward state
+                    if dec_cell.state_size > enc_cell.state_size*2:
                         rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
-                        c = tf.concat(1, [rest_state, c])
+                        c = tf.concat(1, [rest_state, rev_encoder_state, encoder_mem])
+                    else:
+                        c = tf.concat(1, [rev_encoder_state, encoder_mem])
 
                     return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
                                                             target_vocab_size, size,
@@ -150,8 +150,8 @@ class TranslationModel(object):
                             with tf.variable_scope("embedding"):
                                 with ops.device("/cpu:0"):
                                     embedding = vs.get_variable("embedding", [source_vocab_size, size])
-                                    embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
-                                    rev_embedded = [embedding_ops.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
+                                    embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
+                                    rev_embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
 
                             # Encoder.
                             with tf.variable_scope("forward"):
