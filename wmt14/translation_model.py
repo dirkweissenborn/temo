@@ -49,7 +49,7 @@ class TranslationModel(object):
     def __init__(self, source_vocab_size, target_vocab_size, max_length, size,
                  num_layers, max_gradient_norm, batch_size, learning_rate,
                  learning_rate_decay_factor, cell_type="GRU", attention=False,
-                 num_samples=-1, forward_only=False):
+                 num_read_keys=0, forward_only=False):
         """Create the model.
 
         Args:
@@ -89,8 +89,10 @@ class TranslationModel(object):
                 if cell_type == "AssociativeGRU":
                     print("Use AssociativeGRU!")
                     ctr_cell = GRUCell(size, size*2)
-                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
-                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123))
+                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=size,
+                                                  rng=random.Random(123), num_read_keys=num_read_keys)
+                    dec_cell = DualAssociativeGRUCell(size, num_copies=8, input_size=size, rng=random.Random(123),
+                                                      num_read_keys=num_read_keys)
 
                     enc_cell = ControllerWrapper(ctr_cell, enc_cell)
 
@@ -311,6 +313,12 @@ class TranslationModel(object):
 
         outputs = session.run(self.decoded, input_feed)
         return outputs # loss, outputs, decoded symbols
+
+    def reset_rng(self, sess, data):
+        num_steps = self.global_step.eval(sess)
+        for i in range(num_steps):
+            for _ in range(self.batch_size):
+                _, _ = self._rng.choice(data)
 
 
     def get_batch(self, data):

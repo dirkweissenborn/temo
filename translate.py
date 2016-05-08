@@ -55,6 +55,8 @@ tf.app.flags.DEFINE_boolean("self_test", False, "Run a self-test if this is set 
 tf.app.flags.DEFINE_boolean("attention", False, "Use attention.")
 tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
 tf.app.flags.DEFINE_string("decode_out", "/tmp/decoded", "Directory of decoding output.")
+tf.app.flags.DEFINE_integer('num_read_keys', 0, 'number of additional read keys for associative RNN.')
+
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -108,7 +110,7 @@ def create_model(session, forward_only, max_length):
             FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
             FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
             FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
-            forward_only=forward_only, attention=FLAGS.attention)
+            forward_only=forward_only, attention=FLAGS.attention, num_read_keys=FLAGS.num_read_keys)
     ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
     if ckpt and tf.gfile.Exists(ckpt.model_checkpoint_path):
         print("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -145,7 +147,6 @@ def train():
                                                        (FLAGS.en_vocab_size + 2*FLAGS.fr_vocab_size) * FLAGS.size +
                                                         FLAGS.fr_vocab_size))
 
-
         # This is the training loop.
         step_time, loss, norm = 0.0, 0.0, 0.0
         current_step = 0
@@ -175,12 +176,11 @@ def train():
                 checkpoint_path = os.path.join(FLAGS.train_dir, "translate.ckpt")
                 model.saver.save(sess, checkpoint_path, global_step=model.global_step)
                 step_time, loss = 0.0, 0.0
-                # Run evals on development set and print their perplexity.
-                encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(dev_set)
-                _, eval_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs,
-                                             encoder_length, decoder_length, True)
-                eval_ppx = math.exp(eval_loss) if eval_loss < 300 else float('inf')
-                print("  eval perplexity %.2f" % eval_ppx)
+                #encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(dev_set)
+                #_, eval_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs,
+                 #                            encoder_length, decoder_length, True)
+                #eval_ppx = math.exp(eval_loss) if eval_loss < 300 else float('inf')
+                # print("  eval perplexity %.2f" % eval_ppx)
                 sys.stdout.flush()
 
 
