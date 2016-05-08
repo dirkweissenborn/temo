@@ -167,6 +167,10 @@ def train():
                 print ("global step %d learning rate %.4f step-time %.2f perplexity "
                        "%.2f norm %.2f" % (model.global_step.eval(), model.learning_rate.eval(),
                                  step_time, perplexity, norm))
+                # Decrease learning rate if no improvement was seen over last 3 times.
+                if len(previous_losses) > 2 and loss > max(previous_losses[-3:]):
+                    sess.run(model.learning_rate_decay_op)
+                previous_losses.append(loss)
                 # Save checkpoint and zero timer and loss.
                 checkpoint_path = os.path.join(FLAGS.train_dir, "translate.ckpt")
                 model.saver.save(sess, checkpoint_path, global_step=model.global_step)
@@ -176,10 +180,6 @@ def train():
                 _, eval_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs,
                                              encoder_length, decoder_length, True)
                 eval_ppx = math.exp(eval_loss) if eval_loss < 300 else float('inf')
-                # Decrease learning rate if no improvement was seen over last 3 times.
-                if len(previous_losses) > 2 and eval_loss > max(previous_losses[-3:]):
-                    sess.run(model.learning_rate_decay_op)
-                previous_losses.append(eval_loss)
                 print("  eval perplexity %.2f" % eval_ppx)
                 sys.stdout.flush()
 
