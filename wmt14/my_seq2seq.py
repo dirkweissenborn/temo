@@ -187,7 +187,7 @@ def _beamsearch_and_embed(beam_size, num_symbols, embedding, output_projection=N
 
 
 def my_rnn(cell, inputs, initial_state=None, dtype=None,
-        sequence_length=None, scope=None):
+           sequence_length=None, scope=None):
     """Creates a recurrent neural network specified by RNNCell "cell".
 
     The simplest form of RNN network generated is:

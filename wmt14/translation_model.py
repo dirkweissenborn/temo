@@ -89,8 +89,8 @@ class TranslationModel(object):
                     print("Use AssociativeGRU!")
                     enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=2*size,
                                                   rng=random.Random(123), num_read_keys=num_read_keys)
-                    dec_cell = DualAssociativeGRUCell(size, num_read_mems=2, num_copies=8, input_size=2*size, rng=random.Random(123),
-                                                      num_read_keys=num_read_keys)
+                    dec_cell = DualAssociativeGRUCell(size, num_read_mems=2, num_copies=8, input_size=2*size,
+                                                      rng=random.Random(123), num_read_keys=num_read_keys)
 
                     enc_cell = SelfControllerWrapper(enc_cell, size)
 
@@ -119,13 +119,14 @@ class TranslationModel(object):
                                 my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
 
                     c = None
-                    encoder_mem = tf.slice(encoder_state, [0,size],[-1,-1]) #remove output from forward state
-                    if dec_cell.state_size > enc_cell.state_size*2:
-                        rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size], tf.float32)
-                        c = tf.concat(1, [rest_state, rev_encoder_state, encoder_mem])
+                    encoder_mem = tf.slice(encoder_state, [0, 0], [-1, enc_cell.state_size-size])
+                    if dec_cell.state_size > enc_cell.state_size*2-size:
+                        rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size*2 + size], tf.float32)
+                        # zero memory for decoder assoc mem + assoc_mem of forward and backward encoder + rev output of self controller (within rev_encoder_state)
+                        c = tf.concat(1, [rest_state, encoder_mem, rev_encoder_state])
                     else:
-                        c = tf.concat(1, [rev_encoder_state, encoder_mem])
-
+                        c = tf.concat(1, [encoder_mem, rev_encoder_state])
+                    c = tf.reshape(c, [-1, dec_cell.state_size])
                     return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
                                                             target_vocab_size, size,
                                                             output_projection=output_projection, beam_size=5,

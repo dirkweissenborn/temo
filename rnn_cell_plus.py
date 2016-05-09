@@ -126,7 +126,6 @@ class AssociativeGRUCell(RNNCell):
                     perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            #old_h = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = state
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
@@ -281,8 +280,8 @@ class SelfControllerWrapper(RNNCell):
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
     def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, num_read_keys=0, read_only=False, rng=None):
-        AssociativeGRUCell.__init__(self, num_units, num_copies, input_size, num_read_keys, read_only, rng)
         self._num_read_mems = num_read_mems
+        AssociativeGRUCell.__init__(self, num_units, num_copies, input_size, num_read_keys, read_only, rng)
 
     @property
     def state_size(self):
@@ -299,10 +298,9 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                     perms = functools.reduce(lambda x, y: x+y, self._permutations)
                     perms = tf.constant(perms)
 
-            #old_h = tf.slice(state, [0, 0], [-1, self._num_units])
             old_ss = tf.slice(state, [0, 0], [-1, self._num_units * self._num_copies])
             dual_mem = tf.slice(state, [0, self._num_units * self._num_copies], [-1, -1])
-            read_mems = tf.split(1,self._num_read_mems, dual_mem)
+            read_mems = tf.split(1, self._num_read_mems, dual_mem)
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
                 key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
