@@ -276,7 +276,6 @@ class SelfControllerWrapper(RNNCell):
     def state_size(self):
         return self._cell.state_size + self._cell.output_size
 
-
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
     def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, num_read_keys=0, read_only=False, rng=None):

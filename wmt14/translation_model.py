@@ -113,7 +113,6 @@ class TranslationModel(object):
                             _, encoder_state = \
                                 my_seq2seq.my_rnn(enc_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
 
-
                         with tf.variable_scope("backward"):
                             _, rev_encoder_state = \
                                 my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
@@ -190,10 +189,19 @@ class TranslationModel(object):
                             output_projection=output_projection if do_decode else None,
                             feed_previous=do_decode, beam_size=5)
                     else:
-                        return my_seq2seq.embedding_rnn_seq2seq(rev_encoder_inputs, decoder_inputs, decoder_length, encoder_length,
-                                                                enc_cell, source_vocab_size, target_vocab_size, size,
-                                                                output_projection=output_projection, beam_size=5,
-                                                                feed_previous=do_decode)
+                        with tf.variable_scope("encoder"):
+                            _, rev_encoder_state, _ = \
+                                    my_seq2seq.embedding_rnn_decoder(rev_encoder_inputs, encoder_length,
+                                                                     enc_cell.zero_state(batch_size, tf.float32),
+                                                                     enc_cell, source_vocab_size, size,
+                                                                     feed_previous=False)
+
+                        dec_cell = TranslationOutputWrapper(enc_cell, size)
+                        return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, rev_encoder_state,
+                                                                dec_cell, target_vocab_size, size,
+                                                                output_projection=output_projection if do_decode else None,
+                                                                feed_previous=do_decode, beam_size=5)
+
 
             # Feeds for inputs.
             self.encoder_inputs = []
@@ -372,3 +380,31 @@ class TranslationModel(object):
 
         return batch_encoder_inputs, batch_rev_encoder_inputs, batch_decoder_inputs, \
                np.array(encoder_lengths, dtype=np.int32), np.array(decoder_lengths, dtype=np.int32)
+
+
+class TranslationOutputWrapper(RNNCell):
+
+    def __init__(self, cell, output_size):
+        self._cell = cell
+        self._output_size = output_size
+
+    @property
+    def input_size(self):
+        return self._cell.input_size
+
+    @property
+    def output_size(self):
+        return self._output_size
+
+    @property
+    def state_size(self):
+        return self._cell.state_size
+
+    def __call__(self, inputs, state, scope=None):
+        """Run the cell and output projection on inputs, starting from state."""
+        output, res_state = self._cell(inputs, state)
+        # Default scope: "OutputProjectionWrapper"
+        with vs.variable_scope("Output_Projection"):
+            output = linear([output], 2 * self._output_size, True)
+            output = tf.reduce_max(tf.reshape(output, [-1, 2, self._output_size]), [1], keep_dims=False)
+        return output, res_state
