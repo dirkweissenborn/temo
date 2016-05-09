@@ -209,10 +209,10 @@ class TranslationModel(object):
             self.decoder_inputs = []
             self.encoder_length = tf.placeholder(tf.int32, shape=[None], name="encoder_length")
             self.decoder_length = tf.placeholder(tf.int32, shape=[None], name="decoder_length")
-            for i in range(max_length):  # Last bucket is the biggest one.
+            for i in range(max_length):
                 self.encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                           name="encoder{0}".format(i)))
-            for i in range(max_length):  # Last bucket is the biggest one.
+            for i in range(max_length):
                 self.rev_encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                               name="rev_encoder{0}".format(i)))
             for i in range(max_length):
@@ -324,10 +324,11 @@ class TranslationModel(object):
 
     def reset_rng(self, sess, data):
         num_steps = self.global_step.eval(sess)
-        for i in range(num_steps):
-            for _ in range(self.batch_size):
-                _, _ = self._rng.choice(data)
-
+        if num_steps > 0:
+            print("Resetting rng to step %d" % num_steps)
+            for i in range(num_steps):
+                for _ in range(self.batch_size):
+                    self._rng.choice(data)
 
     def get_batch(self, data):
         """Get a random batch of data from the specified bucket, prepare for step.

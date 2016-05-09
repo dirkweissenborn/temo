@@ -70,7 +70,7 @@ def training(embeddings, FLAGS):
                 cellA = AssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size+embedding_size,
                                            rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
                 cellB = DualAssociativeGRUCell(mem_size, num_copies=FLAGS.num_copies, input_size=mem_size+embedding_size,
-                                               rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
+                                               rng=random.Random(123), num_read_keys=FLAGS.num_read_keys, share_key=True)
                 cellA = SelfControllerWrapper(cellA, embedding_size)
                 cellB = SelfControllerWrapper(cellB, embedding_size)
 
@@ -399,7 +399,6 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             p, s, _ = my_rnn(None, GRUCell(h_size, cellA.output_size), lengthsA, E, additional_inputs=tf.pack(outsP))
             tf.get_variable_scope().reuse_variables()
             h, _, _ = my_rnn(None, GRUCell(h_size, cellB.output_size), lengthsB, E, init_state=s, additional_inputs=tf.pack(outsH))
-
 
         h = tf.concat(1, [p, h, tf.abs(p-h)])
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)

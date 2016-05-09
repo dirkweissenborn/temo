@@ -140,6 +140,7 @@ def train():
 
         print("Creating %d layers of %d units." % (FLAGS.num_layers, FLAGS.size))
         model = create_model(sess, False, max_length)
+        model.reset_rng(sess, train_set)
 
         num_params = functools.reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
         print("Num params: %d" % num_params)

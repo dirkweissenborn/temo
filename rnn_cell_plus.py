@@ -250,7 +250,7 @@ class SelfControllerWrapper(RNNCell):
         prev_state = None
         if self._cell.state_size > 0:
             prev_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
-        prev_out = tf.slice(state, [0, self._cell.state_size], [-1,self._cell.output_size])
+        prev_out = tf.slice(state, [0, self._cell.state_size], [-1, -1])
         inputs = tf.concat(1, [inputs, prev_out])
         new_out, prev_state = self._cell(inputs, prev_state)
         out = new_out
@@ -278,8 +278,10 @@ class SelfControllerWrapper(RNNCell):
 
 class DualAssociativeGRUCell(AssociativeGRUCell):
 
-    def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, num_read_keys=0, read_only=False, rng=None):
+    def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, share_key=False,
+                 num_read_keys=0, read_only=False, rng=None):
         self._num_read_mems = num_read_mems
+        self._share_key = share_key
         AssociativeGRUCell.__init__(self, num_units, num_copies, input_size, num_read_keys, read_only, rng)
 
     @property
@@ -302,22 +304,30 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
             read_mems = tf.split(1, self._num_read_mems, dual_mem)
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
+                num_keys = (1+self._num_read_keys)
+                if self._share_key:
+                    num_keys += 1
+                key = bound(complexify(linear([inputs], num_keys*self._num_units, False)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
-                    if self._num_read_keys > 0:
-                        k = tf.transpose(tf.concat(0, tf.split(1, 1+self._num_read_keys, k[0]) + tf.split(1, 1+self._num_read_keys, k[1])), [1, 0])
+                    if num_keys > 0:
+                        k = tf.transpose(tf.concat(0, tf.split(1, num_keys, k[0]) + tf.split(1, num_keys, k[1])), [1, 0])
                     else:
                         k = tf.transpose(tf.concat(0, k), [1, 0])
                     k = tf.concat(0, [k, tf.gather(k, perms)])
-                    k = tf.split(0, 2*(1+self._num_read_keys), tf.transpose(k, [1, 0]))
+                    k = tf.split(0, 2*num_keys, tf.transpose(k, [1, 0]))
                 w_k_real = k[0]
-                w_k_imag = k[1+self._num_read_keys]
-                r_k_real = k[1:1+self._num_read_keys]
-                r_k_imag = k[2+self._num_read_keys:]
+                w_k_imag = k[num_keys]
+                r_k_real = k[1:num_keys-1]
+                r_k_imag = k[num_keys+1:]
                 r_keys = list(zip(r_k_real, r_k_imag))
                 w_key = (w_k_real, w_k_imag)
                 conj_w_key = _comp_conj(w_key)
+                if self._share_key:
+                    dual_key = conj_w_key
+                else:
+                    dual_key = r_keys[-1]
+                    r_keys = r_keys[:-1]
 
             with vs.variable_scope("Read"):
                 h = uncomplexify(self._read(conj_w_key, c_ss), "retrieved")
@@ -327,7 +337,7 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
 
             with vs.variable_scope("Read_Given"):
                 if self._num_read_mems > 1:
-                    h2_s = [uncomplexify(self._read(conj_w_key, complexify(read_mem))) for read_mem in read_mems]
+                    h2_s = [uncomplexify(self._read(dual_key, complexify(read_mem))) for read_mem in read_mems]
                     h2 = tf.reshape(tf.concat(1, h2_s, name="retrieved"), [-1, self._num_read_mems*self._num_units])
                 else:
                     h2 = uncomplexify(self._read(conj_w_key, complexify(read_mems[0])), "retrieved")
