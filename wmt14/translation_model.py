@@ -241,7 +241,7 @@ class TranslationModel(object):
 
                 clipped_gradients, norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
                 is_fin = tf.reduce_all(tf.is_finite(norm))
-                self.gradient_norm = tf.cond(is_fin, lambda: norm, lambda: tf.zeros_like(self.gradient_norm,tf.float32))
+                self.gradient_norm = tf.cond(is_fin, lambda: norm, lambda: tf.zeros_like(norm,tf.float32))
 
                 def no_update():
                     u = tf.assign_add(self.global_step, 1)
