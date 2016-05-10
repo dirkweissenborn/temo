@@ -238,9 +238,18 @@ class TranslationModel(object):
                 for g, p in zip(gradients, params):
                     if g is None:
                         print("Gradient for %s is None." % p.name)
-               # gradients = [tf.clip_by_value(g, -5.0, 5.0) if g is not None else g for g in gradients]
-                clipped_gradients, self.gradient_norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
-                self.update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
+
+                clipped_gradients, norm = tf.clip_by_global_norm(gradients, max_gradient_norm)
+                is_fin = tf.reduce_all(tf.is_finite(norm))
+                self.gradient_norm = tf.cond(is_fin, lambda: norm, lambda: tf.zeros_like(self.gradient_norm,tf.float32))
+
+                def no_update():
+                    u = tf.assign_add(self.global_step, 1)
+                    with tf.control_dependencies([u]):
+                        return tf.constant(True)
+
+                update = opt.apply_gradients(zip(clipped_gradients, params), global_step=self.global_step)
+                self.update = tf.cond(is_fin, lambda: update, no_update)
             self.saver = tf.train.Saver(tf.all_variables())
 
     def set_no_unk(self, sess):
