@@ -176,7 +176,7 @@ def train():
                 # Save checkpoint and zero timer and loss.
                 checkpoint_path = os.path.join(FLAGS.train_dir, "translate.ckpt")
                 model.saver.save(sess, checkpoint_path, global_step=model.global_step)
-                step_time, loss = 0.0, 0.0
+                step_time, loss, norm = 0.0, 0.0, 0.0
                 #encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(dev_set)
                 #_, eval_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs,
                  #                            encoder_length, decoder_length, True)
