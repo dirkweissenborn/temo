@@ -317,7 +317,7 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
             cell = DropoutWrapper(cell, keep_prob_var, keep_prob_var)
 
         def my_rnn(inp, ids, cell, length, embeddings, rev=False, init_state=None):
-            if ids:
+            if ids is not None:
                 E = tf.get_variable("E_w", initializer=tf.identity(embeddings), trainable=True)
                 if inp:
                     inp = tf.concat(2, [tf.nn.embedding_lookup(E, ids), inp])
