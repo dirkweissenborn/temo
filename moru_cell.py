@@ -75,14 +75,14 @@ class MORUCell(RNNCell):
             new_op_ctr = None
             if self._op_controller_size > 0:
                 with vs.variable_scope("Op_controller"):
-                    new_op_ctr = [tanh(linear([inputs, s, op_ctr], self._op_controller_size, True))]
+                    new_op_ctr = [linear([inputs, s, op_ctr], self._op_controller_size, True)]
             else:
                 new_op_ctr = [inputs, s]
             with vs.variable_scope("Op"):
                 op_weights = self._op_weights(new_op_ctr)
                 new_cs = [o(s, f) * w for (o, w) in zip(self._ops, op_weights)]
-                new_c = tf.reduce_sum(tf.pack(new_cs), [0])
+                new_c = tf.add_n(new_cs)
         if self._op_controller_size > 0:
-            return new_c, tf.concat(1, [new_c, new_op_ctr])
+            return new_c, tf.concat(1, [new_c] + new_op_ctr)
         else:
             return new_c, new_c
