@@ -7,8 +7,6 @@ import os
 import numpy as np
 import re
 
-
-
 def encode(sentence, vocab, embeddings, fill_vocab=False):
     embedding_size = embeddings.vectors.shape[1]
     words = []
@@ -108,6 +106,7 @@ def training(embeddings, FLAGS):
 
 
             nclasses = 2 if FLAGS.binary else 5
+            print("Creating model...")
             with tf.device(FLAGS.device):
                 model = create_model(max_l, l2_lambda, learning_rate, cell, task_embeddings, FLAGS.embedding_mode,
                                      FLAGS.keep_prob, nclasses)
@@ -150,8 +149,9 @@ def training(embeddings, FLAGS):
                 return accuracy
 
             saver = tf.train.Saver(tf.trainable_variables())
+            print("Initializing model...")
             sess.run(tf.initialize_all_variables())
-
+            print("Done.")
             shuffled = shuffle(list(train), random_state=rng2.randint(0, 1000))
 
             loss = 0.0
@@ -352,8 +352,7 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
                                                                 for t in train_params if "E_w" not in t.name]))
             loss = loss + l2_loss
 
-        update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params,
-                                                                           gate_gradients=2)
+        update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params)
     return {"inp": inp, "ids": ids, "lengths": lengths, "y": y,
             "probs": probs, "scores": scores, "keep_prob": keep_prob_var,
             "loss": loss, "update": update}
