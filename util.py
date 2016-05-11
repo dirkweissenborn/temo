@@ -8,7 +8,9 @@ def load_embeddings(fn, format="prepared"):
         import pickle
 
         content = io.open(fn, 'rb')
-        state = pickle.load(content)
+        u = pickle._Unpickler(content)
+        u.encoding = 'latin1'
+        state = u.load()
         voc, vec = state
         if len(voc) == 2:
             words, counts = voc
