@@ -388,7 +388,7 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
                 s = tf.concat(1, [rest_state, s])
             h, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
-        h = tf.concat(1, [p, h])
+        h = tf.concat(1, [p, h, tf.abs(p-h)])
         h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)
         scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
         probs = tf.nn.softmax(scores)
