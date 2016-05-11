@@ -370,10 +370,10 @@ if __name__ == "__main__":
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
+    tf.app.flags.DEFINE_float("learning_rate_decay", 0.9,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
-    tf.app.flags.DEFINE_integer("min_epochs", 10, "Minimum num of epochs")
+    tf.app.flags.DEFINE_integer("min_epochs", 2, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
