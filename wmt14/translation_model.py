@@ -48,8 +48,8 @@ class TranslationModel(object):
 
     def __init__(self, source_vocab_size, target_vocab_size, max_length, size,
                  num_layers, max_gradient_norm, batch_size, learning_rate,
-                 learning_rate_decay_factor, cell_type="GRU", attention=False,
-                 num_read_keys=0, forward_only=False):
+                 learning_rate_decay_factor, enc_cell, dec_cell, attention=False,
+                 shared=False, forward_only=False, reverse=False):
         """Create the model.
 
         Args:
@@ -83,24 +83,14 @@ class TranslationModel(object):
             self.symbol_bias = tf.get_variable("proj_b", [self.target_vocab_size])
             output_projection = (w, self.symbol_bias)
 
-            def seq2seq_f(encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
-                enc_cell, ctr_cell = None, None
-                if cell_type == "AssociativeGRU":
-                    print("Use AssociativeGRU!")
-                    enc_cell = AssociativeGRUCell(size, num_copies=8, input_size=2*size,
-                                                  rng=random.Random(123), num_read_keys=num_read_keys)
-                    dec_cell = DualAssociativeGRUCell(size, num_read_mems=2, num_copies=8, input_size=2*size,
-                                                      rng=random.Random(123), num_read_keys=num_read_keys)
-
-                    enc_cell = SelfControllerWrapper(enc_cell, size)
-
-                    def outproj(out, out_size):
-                        output = linear([out], 2 * out_size, True)
-                        output = tf.reduce_max(tf.reshape(output, [-1, 2, out_size]), [1], keep_dims=False)
-                        return output
-                    dec_cell = SelfControllerWrapper(dec_cell, size, outproj, size)
-
-                    inputs = rev_encoder_inputs
+            def seq2seq_f(encoder_inputs, decoder_inputs, encoder_length, decoder_length, do_decode):
+                if attention:
+                    rev_encoder_inputs = tf.reverse_sequence(tf.pack(encoder_inputs),
+                                                             tf.cast(encoder_length, tf.int64), 0, 1)
+                    rev_encoder_inputs = tf.split(0, len(encoder_inputs), rev_encoder_inputs)
+                    rev_encoder_inputs = [tf.squeeze(inp,[0]) for inp in rev_encoder_inputs]
+                    assert not shared, "attention is not usable in shared mode"
+                    print("Use attention!")
                     with tf.variable_scope("encoder"):
                         with tf.variable_scope("embedding"):
                             with ops.device("/cpu:0"):
@@ -110,59 +100,16 @@ class TranslationModel(object):
 
                         # Encoder.
                         with tf.variable_scope("forward"):
-                            _, encoder_state = \
+                            encoder_outputs, encoder_states = \
                                 my_seq2seq.my_rnn(enc_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
 
-                        with tf.variable_scope("backward"):
-                            _, rev_encoder_state = \
-                                my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
+                            top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
+                                          for e in encoder_outputs]
+                            encoder_states = array_ops.concat(1, top_states)
 
-                    c = None
-                    encoder_mem = tf.slice(encoder_state, [0, 0], [-1, enc_cell.state_size-size])
-                    if dec_cell.state_size > enc_cell.state_size*2-size:
-                        rest_state = tf.zeros([batch_size, dec_cell.state_size - enc_cell.state_size*2 + size], tf.float32)
-                        # zero memory for decoder assoc mem + assoc_mem of forward and backward encoder + rev output of self controller (within rev_encoder_state)
-                        c = tf.concat(1, [rest_state, encoder_mem, rev_encoder_state])
-                    else:
-                        c = tf.concat(1, [encoder_mem, rev_encoder_state])
-                    c = tf.reshape(c, [-1, dec_cell.state_size])
-                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c, dec_cell,
-                                                            target_vocab_size, size,
-                                                            output_projection=output_projection, beam_size=5,
-                                                            feed_previous=do_decode)
-                else:
-                    enc_cell = None
-                    if cell_type == "LSTM":
-                        enc_cell = BasicLSTMCell(size,size)
-                    else:
-                        enc_cell = GRUCell(size, size)
-                    if num_layers > 1:
-                        enc_cell = tf.nn.rnn_cell.MultiRNNCell([enc_cell] * num_layers)
-                    if attention:
-                        print("Use attention!")
-                        ctr_cell = None
-                        if cell_type == "LSTM":
-                            ctr_cell = BasicLSTMCell(size,input_size=2*size)
-                        else:
-                            ctr_cell = GRUCell(size, 2*size)
-
-                        with tf.variable_scope("encoder"):
-                            with tf.variable_scope("embedding"):
-                                with ops.device("/cpu:0"):
-                                    embedding = vs.get_variable("embedding", [source_vocab_size, size])
-                                    embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in encoder_inputs]
-                                    rev_embedded = [tf.nn.embedding_lookup(embedding, array_ops.reshape(inp, [-1])) for inp in rev_encoder_inputs]
-
-                            # Encoder.
-                            with tf.variable_scope("forward"):
-                                encoder_outputs, encoder_states = \
-                                    my_seq2seq.my_rnn(enc_cell, embedded, sequence_length=encoder_length, dtype=tf.float32)
-
-                                top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
-                                              for e in encoder_outputs]
-                                encoder_states = array_ops.concat(1, top_states)
+                        if reverse:
                             with tf.variable_scope("backward"):
-                                rev_encoder_outputs, rev_encoder_state = \
+                                rev_encoder_outputs, c = \
                                     my_seq2seq.my_rnn(enc_cell, rev_embedded, sequence_length=encoder_length, dtype=tf.float32)
 
                                 rev_top_states = [array_ops.reshape(e, [-1, 1, enc_cell.output_size])
@@ -173,48 +120,54 @@ class TranslationModel(object):
                             encoder_states = tf.reshape(tf.concat(2, [encoder_states, rev_attention_states]),
                                                           [batch_size, -1, enc_cell.output_size])
 
-                        c = tf.slice(rev_encoder_state, [0, 0], [-1, ctr_cell.state_size])
-                        def outproj(out, out_size):
-                            output = linear([out], 2 * out_size, True)
-                            output = tf.reduce_max(tf.reshape(output, [-1, 2, out_size]), [1], keep_dims=False)
-                            return output
-                        dec_cell = ControllerWrapper(ctr_cell, AttentionCell(encoder_states, encoder_length, size), outproj, size)
+                    #c = tf.slice(rev_encoder_state, [0, 0], [-1, dec_cell.state_size])
+                    att_cell = ControllerWrapper(dec_cell, AttentionCell(encoder_states, encoder_length, size))
+                    att_cell = TranslationOutputWrapper(att_cell, size)
+                    #c = tf.concat(1, [c, tf.zeros([batch_size, dec_cell.state_size-enc_cell.state_size])])
 
-                        c = tf.concat(1, [c, tf.zeros([batch_size, dec_cell.state_size-enc_cell.state_size])])
+                    # Decoder.
+                    return my_seq2seq.embedding_rnn_decoder(
+                        decoder_inputs, decoder_length, att_cell.zero_state(batch_size, tf.float32), att_cell,
+                        target_vocab_size, size,
+                        output_projection=output_projection if do_decode else None,
+                        feed_previous=do_decode, beam_size=5)
+                else:
+                    if reverse:
+                        rev_encoder_inputs = tf.reverse_sequence(tf.pack(encoder_inputs),
+                                                                 tf.cast(encoder_length, tf.int64), 0, 1)
+                        rev_encoder_inputs = tf.split(0, len(encoder_inputs), rev_encoder_inputs)
+                        rev_encoder_inputs = [tf.squeeze(inp, [0]) for inp in rev_encoder_inputs]
+                        encoder_inputs = rev_encoder_inputs
 
-                        # Decoder.
-                        return my_seq2seq.embedding_rnn_decoder(
-                            decoder_inputs, decoder_length, c, dec_cell,
-                            target_vocab_size, size,
-                            output_projection=output_projection if do_decode else None,
-                            feed_previous=do_decode, beam_size=5)
-                    else:
-                        with tf.variable_scope("encoder"):
-                            _, rev_encoder_state, _ = \
-                                    my_seq2seq.embedding_rnn_decoder(rev_encoder_inputs, encoder_length,
-                                                                     enc_cell.zero_state(batch_size, tf.float32),
-                                                                     enc_cell, source_vocab_size, size,
-                                                                     feed_previous=False)
+                    _, c, _ = \
+                            my_seq2seq.embedding_rnn_decoder(encoder_inputs, encoder_length,
+                                                             enc_cell.zero_state(batch_size, tf.float32),
+                                                             enc_cell, source_vocab_size, size,
+                                                             feed_previous=False, scope="encoder")
+                    if shared:
+                        tf.get_variable_scope().reuse_variables()
 
-                        dec_cell = TranslationOutputWrapper(enc_cell, size)
-                        return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, rev_encoder_state,
-                                                                dec_cell, target_vocab_size, size,
-                                                                output_projection=output_projection if do_decode else None,
-                                                                feed_previous=do_decode, beam_size=5)
+                    wrapped_dec_cell = TranslationOutputWrapper(dec_cell, size)
+
+                    if wrapped_dec_cell.state_size > enc_cell.state_size:
+                        rest = tf.zeros([batch_size,wrapped_dec_cell.state_size - enc_cell.state_size], tf.float32)
+                        c = tf.concat(1, [rest, c])
+
+                    return my_seq2seq.embedding_rnn_decoder(decoder_inputs, decoder_length, c,
+                                                            wrapped_dec_cell, target_vocab_size, size,
+                                                            output_projection=output_projection if do_decode else None,
+                                                            feed_previous=do_decode, beam_size=5,
+                                                            scope="encoder" if shared else "decoder")
 
 
             # Feeds for inputs.
             self.encoder_inputs = []
-            self.rev_encoder_inputs = []
             self.decoder_inputs = []
             self.encoder_length = tf.placeholder(tf.int32, shape=[None], name="encoder_length")
             self.decoder_length = tf.placeholder(tf.int32, shape=[None], name="decoder_length")
             for i in range(max_length):
                 self.encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                           name="encoder{0}".format(i)))
-            for i in range(max_length):
-                self.rev_encoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
-                                                              name="rev_encoder{0}".format(i)))
             for i in range(max_length):
                 self.decoder_inputs.append(tf.placeholder(tf.int32, shape=[None],
                                                           name="decoder{0}".format(i)))
@@ -224,7 +177,7 @@ class TranslationModel(object):
                        for i in range(len(self.decoder_inputs) - 1)]
 
             # Training outputs and losses.
-            rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.rev_encoder_inputs, self.decoder_inputs,
+            rnn_outputs, _, self.decoded = seq2seq_f(self.encoder_inputs, self.decoder_inputs,
                                                      self.encoder_length, self.decoder_length, forward_only)
             self.outputs = [nn_ops.xw_plus_b(o, w, self.symbol_bias) for o in rnn_outputs]
 
@@ -255,7 +208,7 @@ class TranslationModel(object):
     def set_no_unk(self, sess):
         sess.run(tf.scatter_update(self.symbol_bias, [data_utils.UNK_ID], [-10000]))
 
-    def step(self, session, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
+    def step(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
         """Run a step of the model feeding the given inputs.
 
         Args:
@@ -281,12 +234,10 @@ class TranslationModel(object):
         input_feed = {}
         for l in range(encoder_size):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[l]
-            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[l]
         for l in range(decoder_size):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
         for l in range(encoder_size, self.max_length):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[-1]
-            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[-1]
         for l in range(decoder_size, self.max_length):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[-1]
 
@@ -309,19 +260,16 @@ class TranslationModel(object):
             return None, outputs[0], outputs[1:]  # None, loss, outputs
 
 
-    def decode(self, session, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
+    def decode(self, session, encoder_inputs, decoder_inputs, encoder_length, decoder_length, forward_only):
         encoder_size, decoder_size = max(encoder_length), max(decoder_length)
         # Input feed: encoder inputs, decoder inputs, target_weights, as provided.
         input_feed = {}
         for l in range(encoder_size):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[l]
-        for l in range(encoder_size):
-            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[l]
         for l in range(decoder_size):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[l]
         for l in range(encoder_size, self.max_length):
             input_feed[self.encoder_inputs[l].name] = encoder_inputs[-1]
-            input_feed[self.rev_encoder_inputs[l].name] = rev_encoder_inputs[-1]
         for l in range(decoder_size, self.max_length):
             input_feed[self.decoder_inputs[l].name] = decoder_inputs[-1]
 
@@ -354,7 +302,7 @@ class TranslationModel(object):
           The triple (encoder_inputs, decoder_inputs, target_weights) for
           the constructed batch that has the proper format to call step(...) later.
         """
-        encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_lengths, decoder_lengths = [], [], [], [], []
+        encoder_inputs, decoder_inputs, encoder_lengths, decoder_lengths = [], [], [], []
 
         # Get a random batch of encoder and decoder inputs from data,
         # pad them if needed, reverse encoder inputs and add GO to decoder.
@@ -364,31 +312,26 @@ class TranslationModel(object):
             decoder_size = len(decoder_input)
             encoder_lengths.append(encoder_size)
             decoder_lengths.append(decoder_size)
-            # Encoder inputs are padded and then reversed.
             encoder_pad = [data_utils.PAD_ID] * (self.max_length - encoder_size)
             encoder_inputs.append(encoder_input + encoder_pad)
-            rev_encoder_inputs.append(list(reversed(encoder_input)) + encoder_pad)
             # Decoder inputs get an extra "GO" symbol, and are padded then.
             decoder_pad_size = self.max_length - decoder_size - 1
             decoder_inputs.append([data_utils.GO_ID] + decoder_input +
                                   [data_utils.PAD_ID] * decoder_pad_size)
 
         # Now we create batch-major vectors from the data selected above.
-        batch_encoder_inputs, batch_rev_encoder_inputs, batch_decoder_inputs = [], [], []
+        batch_encoder_inputs, batch_decoder_inputs = [], []
 
         # Batch encoder inputs are just re-indexed encoder_inputs.
         for length_idx in range(self.max_length):
             batch_encoder_inputs.append(
                 np.array([encoder_inputs[batch_idx][length_idx]
                           for batch_idx in range(self.batch_size)], dtype=np.int32))
-            batch_rev_encoder_inputs.append(
-                np.array([rev_encoder_inputs[batch_idx][length_idx]
-                          for batch_idx in range(self.batch_size)], dtype=np.int32))
             batch_decoder_inputs.append(
                 np.array([decoder_inputs[batch_idx][length_idx]
                           for batch_idx in range(self.batch_size)], dtype=np.int32))
 
-        return batch_encoder_inputs, batch_rev_encoder_inputs, batch_decoder_inputs, \
+        return batch_encoder_inputs, batch_decoder_inputs, \
                np.array(encoder_lengths, dtype=np.int32), np.array(decoder_lengths, dtype=np.int32)
 
 
@@ -415,6 +358,8 @@ class TranslationOutputWrapper(RNNCell):
         output, res_state = self._cell(inputs, state)
         # Default scope: "OutputProjectionWrapper"
         with vs.variable_scope("Output_Projection"):
+            vs.get_variable_scope()._reuse = \
+                    any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())  # HACK
             output = linear([output], 2 * self._output_size, True)
             output = tf.reduce_max(tf.reshape(output, [-1, 2, self._output_size]), [1], keep_dims=False)
         return output, res_state

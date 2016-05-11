@@ -307,7 +307,14 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 num_keys = (1+self._num_read_keys)
                 if not self._share_key:
                     num_keys += self._num_read_mems
-                key = bound(complexify(linear([inputs], num_keys*self._num_units, False)))
+
+                key1 = linear([inputs], (1+self._num_read_keys)*self._num_units, False)
+                with vs.variable_scope("Dual"):
+                    vs.get_variable_scope()._reuse = \
+                        any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())
+                    key2 = linear([inputs], self._num_read_mems*self._num_units, False)
+                key = bound(complexify(tf.concat(1, [key1, key2])))
+
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
                     if num_keys > 0:
@@ -326,8 +333,8 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 if self._share_key:
                     dual_keys = [conj_w_key for _ in range(self._num_read_mems)]
                 else:
-                    dual_keys = r_keys[:self._num_read_mems]
-                    r_keys = r_keys[self._num_read_mems:]
+                    dual_keys = r_keys[self._num_read_keys:]
+                    r_keys = r_keys[:self._num_read_keys]
 
             with vs.variable_scope("Read"):
                 h = uncomplexify(self._read(conj_w_key, c_ss), "retrieved")

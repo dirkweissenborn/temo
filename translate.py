@@ -27,6 +27,7 @@ import tensorflow as tf
 
 from wmt14 import data_utils
 from wmt14 import translation_model
+from rnn_cell_plus import *
 
 
 tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
@@ -56,8 +57,9 @@ tf.app.flags.DEFINE_boolean("attention", False, "Use attention.")
 tf.app.flags.DEFINE_string("device", "/cpu:0", "Run on device.")
 tf.app.flags.DEFINE_string("decode_out", "/tmp/decoded", "Directory of decoding output.")
 tf.app.flags.DEFINE_integer('num_read_keys', 0, 'number of additional read keys for associative RNN.')
-
-
+tf.app.flags.DEFINE_boolean('auto_encode', False, 'Train auto-encoder for english instead.')
+tf.app.flags.DEFINE_boolean('shared', False, 'Shared params for encoder and decoder.')
+tf.app.flags.DEFINE_boolean('reverse', False, 'Reverse input.')
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -83,7 +85,8 @@ def read_data(source_path, target_path, max_length, min_length=0, max_size=None)
     with tf.gfile.GFile(source_path, mode="r") as source_file:
         with tf.gfile.GFile(target_path, mode="r") as target_file:
             counter = 0
-            source, target = source_file.readline(), target_file.readline()
+            source = source_file.readline()
+            target = source if FLAGS.auto_encode else target_file.readline()
             while source and target and (not max_size or counter < max_size):
                 source_ids = [int(x) for x in source.split()]
                 target_ids = [int(x) for x in target.split()]
@@ -103,14 +106,38 @@ def read_data(source_path, target_path, max_length, min_length=0, max_size=None)
     return data_set, m_length
 
 
+def create_cells():
+    in_size = FLAGS.size
+    if FLAGS.attention:
+        in_size = 2*in_size
+    enc_cell, dec_cell = None, None
+    if FLAGS.cell_type == "AssociativeGRU":
+        print("Use AssociativeGRU!")
+        enc_cell = AssociativeGRUCell(FLAGS.size, num_copies=8, input_size=2*FLAGS.size,
+                                      rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
+        enc_cell = SelfControllerWrapper(enc_cell, FLAGS.size)
+
+        dec_cell = DualAssociativeGRUCell(FLAGS.size, num_read_mems=1, num_copies=8, input_size=FLAGS.size+in_size,
+                                          rng=random.Random(123), num_read_keys=FLAGS.num_read_keys)
+        dec_cell = SelfControllerWrapper(dec_cell, in_size)
+    elif FLAGS.cell_type == "LSTM":
+        enc_cell = BasicLSTMCell(FLAGS.size, FLAGS.size)
+        dec_cell = BasicLSTMCell(FLAGS.size, in_size)
+    else:
+        enc_cell = GRUCell(FLAGS.size, FLAGS.size)
+        dec_cell = GRUCell(FLAGS.size, in_size)
+    return enc_cell, dec_cell
+
 def create_model(session, forward_only, max_length):
     """Create translation model and initialize or load parameters in session."""
+    enc_cell, dec_cell = create_cells()
     with tf.device(FLAGS.device):
         model = translation_model.TranslationModel(
             FLAGS.en_vocab_size, FLAGS.fr_vocab_size, max_length,
             FLAGS.size, FLAGS.num_layers, FLAGS.max_gradient_norm, FLAGS.batch_size,
-            FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, cell_type=FLAGS.cell_type,
-            forward_only=forward_only, attention=FLAGS.attention, num_read_keys=FLAGS.num_read_keys)
+            FLAGS.learning_rate, FLAGS.learning_rate_decay_factor, enc_cell, dec_cell,
+            forward_only=forward_only, attention=FLAGS.attention, reverse=FLAGS.reverse,
+            shared=FLAGS.shared)
     ckpt = tf.train.get_checkpoint_state(FLAGS.train_dir)
     if ckpt and tf.gfile.Exists(ckpt.model_checkpoint_path):
         print("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -155,8 +182,8 @@ def train():
         while True:
             # Get a batch and make a step.
             start_time = time.time()
-            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(train_set)
-            step_norm, step_loss, _ = model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
+            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(train_set)
+            step_norm, step_loss, _ = model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
             step_time += (time.time() - start_time) / FLAGS.steps_per_checkpoint
             loss += step_loss / FLAGS.steps_per_checkpoint
             norm += step_norm / FLAGS.steps_per_checkpoint
@@ -208,10 +235,10 @@ def decode():
             # Get token-ids for the input sentence.
             token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), en_vocab)
             # Get a 1-element batch to feed the sentence to the model.
-            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = \
+            encoder_inputs, decoder_inputs, encoder_length, decoder_length = \
                 model.get_batch([(token_ids, [data_utils.PAD_ID] * 2 * len(token_ids))])
             # Get output symbols for the sentence.
-            outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
+            outputs = model.decode(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
             for i in range(len(outputs) // 2):
                 for j in range(outputs[i*2].shape[0]):
                     output = outputs[i*2][j].tolist()
@@ -251,9 +278,9 @@ def decode_testset():
             k = 0
             for (en_tokens, fr_tokens) in test_set:
                 if not FLAGS.no_unk or (data_utils.UNK_ID not in en_tokens and data_utils.UNK_ID not in fr_tokens):
-                    encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
+                    encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch([(en_tokens, [data_utils.PAD_ID] *
                                                                                                             min(max_length, 2 * len(en_tokens)))])
-                    outputs = model.decode(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
+                    outputs = model.decode(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, True)
                     best = (None, -float("inf"))
                     for i in range(len(outputs) // 2):
                         for j in range(outputs[i*2].shape[0]):
@@ -299,16 +326,20 @@ def self_test():
         print("Self-test for neural translation model.")
         # Create model with vocabularies of 10, 2 layers of 32.
         with tf.device(FLAGS.device):
+            enc_cell, dec_cell = create_cells()
             model = translation_model.TranslationModel(10, 10, 6, 32, 1,
                                                        5.0, 32, 0.3, 0.99,
-                                                       cell_type=FLAGS.cell_type, attention=FLAGS.attention)
+                                                       enc_cell, dec_cell,
+                                                       attention=FLAGS.attention,
+                                                       reverse=FLAGS.reverse,
+                                                       shared=FLAGS.shared)
         sess.run(tf.initialize_all_variables())
 
         # Fake data set for both the (3, 3) and (6, 6) bucket.
         data_set = [([1, 1], [2, 2]), ([3, 3], [4]), ([5], [6]), ([1, 1, 1, 1, 1], [2, 2, 2, 2, 2]), ([3, 3, 3], [5, 6])]
         for _ in range(5):  # Train the fake model for 5 steps.
-            encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(data_set)
-            model.step(sess, encoder_inputs, rev_encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
+            encoder_inputs, decoder_inputs, encoder_length, decoder_length = model.get_batch(data_set)
+            model.step(sess, encoder_inputs, decoder_inputs, encoder_length, decoder_length, False)
 
 
 def main(_):
