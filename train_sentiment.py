@@ -43,9 +43,9 @@ def training(embeddings, FLAGS):
     dev = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in dev]
     test = [(encode(tree.sentence, vocab, embeddings, True), tree.label) for tree in test]
     if FLAGS.binary:
-        train = filter(lambda x: x[1] != 0, train)
-        test = filter(lambda x: x[1] != 0, test)
-        dev = filter(lambda x: x[1] != 0, dev)
+        train = [x for x in train if x[1] != 0]
+        test = [x for x in test if x[1] != 0]
+        dev = [x for x in dev if x[1] != 0]
 
     print("#Training phrases: %d" % len(train))
     print("#Test: %d" % len(test))
@@ -102,7 +102,7 @@ def training(embeddings, FLAGS):
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
-                    biases = map(lambda s: float(s), biases.split(","))
+                    biases = [float(s) for s in biases.split(",")]
                 ops = FLAGS.moru_ops.split(",")
                 cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
@@ -127,7 +127,7 @@ def training(embeddings, FLAGS):
                                                  max_batch_size=batch_size)
                     size = min(len(ds) - e_off, batch_size)
                     allowed_conds = ["/cond_%d/" % i for i in range(np.min(lengths))]
-                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    current_weights = [w for w in op_weights if any(c in w.name for c in allowed_conds)]
                     random.shuffle(current_weights)
                     result = sess.run([model["probs"]] + current_weights[:10],
                                    feed_dict={model["inp"]: inp[:,:size],
@@ -245,8 +245,8 @@ def load_data(path):
     trees = []
     with open(parents_fn, 'r') as parents_f, open(labels_fn, 'r') as labels_f, open(sents_fn, 'r') as sents_f:
         for parents in parents_f:
-            parents = map(int, parents.strip().split(" "))
-            labels = map(int, labels_f.readline().strip().split(" "))
+            parents = [int(s) for s in parents.strip().split(" ")]
+            labels = [int(s) for s in labels_f.readline().strip().split(" ")]
             sentence = sents_f.readline().strip().split(" ")
             trees.append(SentimentTree(labels, parents, sentence))
 
@@ -267,7 +267,7 @@ class SentimentTree():
         self.label = labels[-1]
 
     def all_labeled_phrases(self):
-        return map(lambda n: (self.sentence[n[0]:n[1]], n[2]), self.nodes)
+        return [(self.sentence[n[0]:n[1]], n[2]) for n in self.nodes]
 
     def labeled_sentence(self):
         return (self.sentence, self.nodes[-1][2])
