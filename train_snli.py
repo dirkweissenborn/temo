@@ -8,6 +8,7 @@ import os
 from tensorflow.python.ops.rnn import rnn
 import time
 import sys
+import functools
 
 
 def training(embeddings, FLAGS):
@@ -17,8 +18,8 @@ def training(embeddings, FLAGS):
     trainA, trainB, devA, devB, testA, testB, y_scores, vocab, oo_vocab = load_data(FLAGS.data, embeddings)
 
     # embeddings
-    task_embeddings = np.random.uniform(-0.05, 0.05, [len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
-    for w, i in vocab.iteritems():
+    task_embeddings = np.random.normal(size=[len(vocab)+len(oo_vocab), embedding_size]).astype("float32")
+    for w, i in vocab.items():
         task_embeddings[len(oo_vocab) + i] = embeddings[w]
 
     # accumulate counts for buckets
@@ -48,13 +49,12 @@ def training(embeddings, FLAGS):
 
     idsA, idsB, lengthsA, lengthsB = None, None, None, None
 
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
-        with tf.Session() as sess:
+        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             tf.set_random_seed(rng.randint(0, 10000))
             rng2 = random.Random(rng.randint(0, 10000))
 
-            input_size = embedding_size
             cellA = cellB = None
             if FLAGS.cell == 'LSTM':
                 cellA = cellB = BasicLSTMCell(mem_size, embedding_size)
@@ -65,28 +65,27 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
-            elif FLAGS.cell == "AssociativeGRU":
-                cellA = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
-                cellB = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size, read_only=True)
+                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, embedding_size, FLAGS.moru_op_ctr)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":
                 tunable_embeddings, fixed_embeddings = task_embeddings[:len(oo_vocab)], task_embeddings[len(oo_vocab):]
 
-            model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
-                                 fixed_embeddings, FLAGS.keep_prob)
+            with tf.device(FLAGS.device):
+                model = create_model(max_l, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings,
+                                     fixed_embeddings, FLAGS.keep_prob)
+
             tf.get_variable_scope().reuse_variables()
 
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
                           if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
 
-            def evaluate(dsA, dsB, _scores):
+            def evaluate(dsA, dsB, labels):
                 idsA, idsB, lengthsA, lengthsB = None, None, None, None
                 e_off = 0
                 accuracy = 0.0
-                y = encode_labels(_scores)
-                op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
+                y = encode_labels(labels)
+                op_weights_monitor = {ops[int(w.name[-3:-2])]:[] for w in op_weights}
 
                 while e_off < len(dsA):
                     idsA, idsB, lengthsA, lengthsB = batchify(dsA[e_off:e_off + batch_size],
@@ -95,8 +94,8 @@ def training(embeddings, FLAGS):
                                                               max_length=max_l,
                                                               max_batch_size=batch_size)
                     size = min(len(dsA) - e_off, batch_size)
-                    allowed_conds = ["/cond_%d/" % (2*i) for i in xrange(min(np.min(lengthsA), np.min(lengthsB)))]
-                    current_weights = filter(lambda w: any(c in w.name for c in allowed_conds), op_weights)
+                    allowed_conds = ["/cond_%d/" % (2*i) for i in range(min(np.min(lengthsA), np.min(lengthsB)))]
+                    current_weights = [w for w in op_weights if any(c in w.name for c in allowed_conds)]
                     result = sess.run([model["probs"]] + current_weights[:10],
                                     feed_dict={model["idsA"]: idsA[:,:size],
                                                model["idsB"]: idsB[:,:size],
@@ -106,9 +105,9 @@ def training(embeddings, FLAGS):
                     e_off += size
 
                     for probs, w in zip(result[1:], current_weights):
-                        op_weights_monitor[w.name[-11:]].extend(probs.tolist())
+                        op_weights_monitor[ops[int(w.name[-3:-2])]].extend(probs.tolist())
 
-                for k,v in op_weights_monitor.iteritems():
+                for k,v in op_weights_monitor.items():
                     hist, _ = np.histogram(np.array(v), bins=5,range=(0.0,1.0))
                     hist = (hist * 1000) / np.sum(hist)
                     print(k, hist.tolist())
@@ -118,6 +117,9 @@ def training(embeddings, FLAGS):
 
             saver = tf.train.Saver(tf.trainable_variables())
             sess.run(tf.initialize_all_variables())
+            num_params = functools.reduce(lambda acc, x: acc + x.size, sess.run(tf.trainable_variables()), 0)
+            print("Num params: %d" % num_params)
+            print("Num params (without embeddings): %d" % (num_params - (len(oo_vocab) + len(vocab)) * embedding_size))
 
             shuffledA, shuffledB, y = \
                 shuffle(list(trainA), list(trainB), list(y_scores[0]), random_state=rng2.randint(0, 1000))
@@ -128,7 +130,8 @@ def training(embeddings, FLAGS):
             i = 0
             accuracy = float("-inf")
             step_time = 0.0
-            while True:
+            epoch_acc = 0.0
+            while not FLAGS.eval:
                 start_time = time.time()
                 idsA, idsB, lengthsA, lengthsB = batchify(shuffledA[offset:offset+batch_size],
                                                           shuffledB[offset:offset+batch_size],
@@ -136,7 +139,9 @@ def training(embeddings, FLAGS):
                                                           max_length=max_l,
                                                           max_batch_size=batch_size)
                 train_labels = encode_labels(y[offset:offset+batch_size])
-                l, _ = sess.run([model["loss"], model["update"]],
+                # update initialized embeddings only after first epoch
+                update = model["update"] if epochs>= 1 else model["update_ex"]
+                l, _ = sess.run([model["loss"], update],
                                 feed_dict={model["idsA"]:idsA,
                                            model["idsB"]:idsB,
                                            model["lengthsA"]: lengthsA,
@@ -153,9 +158,18 @@ def training(embeddings, FLAGS):
 
                 if offset + batch_size > len(shuffledA):
                     epochs += 1
-                    print("\n%d epochs done" % epochs)
                     shuffledA, shuffledB, y = shuffle(shuffledA, shuffledB, y, random_state=rng2.randint(0, 1000))
                     offset = 0
+                    sess.run(model["keep_prob"].assign(1.0))
+                    acc = evaluate(devA, devB, y_scores[1])
+                    sess.run(model["keep_prob"].initializer)
+                    print("\n%d epochs done! Accuracy on Dev: %.3f" % (epochs, acc))
+                    if acc < epoch_acc + 1e-3:
+                        print("Decaying learning-rate!")
+                        lr = tf.get_variable("model/lr")
+                        sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
+                    epoch_acc = acc
+
                 if i == FLAGS.checkpoint:
                     loss /= i
                     sess.run(model["keep_prob"].assign(1.0))
@@ -168,20 +182,18 @@ def training(embeddings, FLAGS):
                     loss = 0.0
                     if acc > accuracy + 1e-5:
                         accuracy = acc
-                        saver.save(sess, '/tmp/my-model')
+                        saver.save(sess, FLAGS.model_path)
                     else:
-                        lr = tf.get_variable("model/lr")
-                        sess.run(lr.assign(lr * FLAGS.learning_rate_decay))
                         if epochs >= FLAGS.min_epochs:
                             break
 
-            saver.restore(sess, '/tmp/my-model')
+            saver.restore(sess, FLAGS.model_path)
             sess.run(model["keep_prob"].assign(1.0))
             acc = evaluate(testA, testB, y_scores[2])
             accuracies.append(acc)
-            print '######## Run %d #########' % run_id
-            print 'Test Accuracy: %.4f' % acc
-            print '########################'
+            print('######## Run %d #########' % run_id)
+            print('Test Accuracy: %.4f' % acc)
+            print('########################')
 
     mean_accuracy = sum(accuracies) / len(accuracies)
 
@@ -191,9 +203,9 @@ def training(embeddings, FLAGS):
             d += (mean-el) * (mean-el)
         return math.sqrt(d/len(pop))
 
-    print '######## Overall #########'
-    print 'Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Accuracy: %.4f (%.4f)' % (mean_accuracy,  s_dev(mean_accuracy, accuracies)))
+    print('########################')
 
     if FLAGS.result_file:
         with open(FLAGS.result_file, 'w') as f:
@@ -211,21 +223,21 @@ def load_data(loc, embeddings):
     trainA, trainB, devA, devB, testA, testB = [],[],[],[],[],[]
     trainS, devS, testS = [],[],[]
 
-    with open(os.path.join(loc, 'snli_1.0_train.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_train.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
                 trainA.append(text[5])
                 trainB.append(text[6])
                 trainS.append(text[0])
-    with open(os.path.join(loc, 'snli_1.0_dev.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_dev.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
                 devA.append(text[5])
                 devB.append(text[6])
                 devS.append(text[0])
-    with open(os.path.join(loc, 'snli_1.0_test.txt'), 'rb') as f:
+    with open(os.path.join(loc, 'snli_1.0_test.txt'), 'r') as f:
         for line in f:
             text = line.strip().split('\t')
             if text[0] != '-':
@@ -253,16 +265,16 @@ def load_data(loc, embeddings):
         word_ids.append(-oo_vocab["</s>"]-1)
         return word_ids
 
-    trainA = map(lambda s: encode(s), trainA[1:])
-    trainB = map(lambda s: encode(s), trainB[1:])
-    devA = map(lambda s: encode(s), devA[1:])
-    devB = map(lambda s: encode(s), devB[1:])
-    testA = map(lambda s: encode(s), testA[1:])
-    testB = map(lambda s: encode(s), testB[1:])
+    trainA = [encode(s) for s in trainA[1:]]
+    trainB = [encode(s) for s in trainB[1:]]
+    devA = [encode(s) for s in devA[1:]]
+    devB = [encode(s) for s in devB[1:]]
+    testA = [encode(s) for s in testA[1:]]
+    testB = [encode(s) for s in testB[1:]]
 
     def normalize_ids(ds):
         for word_ids in ds:
-            for i in xrange(len(word_ids)):
+            for i in range(len(word_ids)):
                 word_ids[i] += len(oo_vocab)
 
     normalize_ids(trainA)
@@ -298,17 +310,18 @@ def batchify(batchA, batchB, idsA, idsB, lengthsA, lengthsB, max_length=None, ma
     lengthsA = np.zeros([max_batch_size], np.int32) if lengthsA is None else lengthsA
     lengthsB = np.zeros([max_batch_size], np.int32) if lengthsB is None else lengthsB
 
-    for i in xrange(len(batchA)):
+    for i in range(len(batchA)):
         lengthsA[i] = len(batchA[i])
-        for j in xrange(len(batchA[i])):
+        for j in range(len(batchA[i])):
             idsA[j][i] = batchA[i][j]
 
-    for i in xrange(len(batchB)):
+    for i in range(len(batchB)):
         lengthsB[i] = len(batchB[i])
-        for j in xrange(len(batchB[i])):
+        for j in range(len(batchB[i])):
             idsB[j][i] = batchB[i][j]
 
     return idsA, idsB, lengthsA, lengthsB
+
 
 # Create Model
 def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable_embeddings, fixed_embeddings, keep_prob,
@@ -324,45 +337,65 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
 
         keep_prob_var = tf.get_variable("keep_prob", (), initializer=tf.constant_initializer(keep_prob, tf.float32),
                                         trainable=False)
-        if keep_prob < 1.0:
-            cellA = DropoutWrapper(cellA, keep_prob_var, keep_prob_var)
-            cellB = DropoutWrapper(cellB, keep_prob_var, keep_prob_var)
 
-        def my_rnn(ids, cell, lengths, rev=False, init_state=None):
+        def create_embeddings():
+            #with tf.device("/cpu:0"):
             E = None
             if fixed_embeddings is not None and fixed_embeddings.shape[0] > 0:
-                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=False)
+                E = tf.get_variable("E_fix", initializer=tf.identity(fixed_embeddings), trainable=True)
             if tunable_embeddings is not None and tunable_embeddings.shape[0] > 0:
                 E_tune = tf.get_variable("E_tune", initializer=tf.identity(tunable_embeddings), trainable=True)
                 if E is not None:
                     E = tf.concat(0, [E_tune, E])
                 else:
                     E = E_tune
+            return E
 
-            inp = tf.nn.embedding_lookup(E, ids)
+        def my_rnn(ids, cell, lengths, E=None, additional_inputs=None, rev=False, init_state=None):
+            inp = None
+            if ids is not None:
+                #with tf.device("/cpu:0"):
+                inp = tf.nn.embedding_lookup(E, ids)
+                if additional_inputs is not None:
+                    inp = tf.concat(2, [inp, additional_inputs])
+            else:
+                inp = additional_inputs
 
             if init_state is None:
                 init_state = tf.zeros([cell.state_size], tf.float32)
-                batch_size = tf.gather(tf.shape(inp), [1])
                 init_state = tf.tile(init_state, batch_size)
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
 
             inps = tf.split(0, length, inp)
-            for i in xrange(length):
+            for i in range(length):
                 inps[i] = tf.squeeze(inps[i], [0])
-            _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
-            out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
-            return out, final_state
+            outs, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
+            last_out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
+            # mean pooling
+            #last_out = tf.reduce_sum(tf.pack(outs), [0]) / tf.cast(tf.reshape(tf.tile(lengths, [cell.output_size]), [-1, cell.output_size]) , tf.float32)
+            return last_out, final_state, outs
 
-        with tf.variable_scope("premise", initializer=initializer):
-            premise, c = my_rnn(idsA, cellA, lengthsA)
+        if keep_prob < 1.0:
+            cellA = DropoutWrapper(cellA, keep_prob_var)
+            cellB = DropoutWrapper(cellB, keep_prob_var)
+        E = create_embeddings()
+        with tf.variable_scope("rnn", initializer=initializer):
+            p, s, outsP = my_rnn(idsA, cellA, lengthsA, E)
+            tf.get_variable_scope().reuse_variables()
+            if cellB.state_size > cellA.state_size:
+                rest_state = tf.zeros([cellB.state_size - cellA.state_size], tf.float32)
+                rest_state = tf.reshape(tf.tile(rest_state, batch_size), [-1, cellB.state_size - cellA.state_size])
+                s = tf.concat(1, [rest_state, s])
+            h, _, outsH = my_rnn(idsB, cellB, lengthsB, E, init_state=s)
 
-        with tf.variable_scope("hypothesis", initializer=initializer):
-            hypothesis, _ = my_rnn(idsB, cellB, lengthsB, init_state=c)
+        #with tf.variable_scope("accum", initializer=initializer):
+         #   p, s, _ = my_rnn(None, GRUCell(h_size, cellA.output_size), lengthsA, E, additional_inputs=tf.pack(outsP))
+         #   tf.get_variable_scope().reuse_variables()
+         #   h, _, _ = my_rnn(None, GRUCell(h_size, cellB.output_size), lengthsB, E, init_state=s, additional_inputs=tf.pack(outsH))
 
-        h = tf.concat(1, [premise, hypothesis])
-        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=tf.tanh,
-                                              weight_init=None)
+        h = tf.concat(1, [p, h, tf.abs(p-h)])
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)
+        h = tf.contrib.layers.fully_connected(h, h_size, activation_fn=lambda x: tf.maximum(0.0, x), weight_init=None)
         scores = tf.contrib.layers.fully_connected(h, 3, weight_init=None)
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
@@ -373,10 +406,16 @@ def create_model(length, l2_lambda, learning_rate, h_size, cellA, cellB, tunable
             l2_loss = l2_lambda * tf.reduce_sum(array_ops.pack([tf.nn.l2_loss(t) for t in train_params]))
             loss = loss+l2_loss
 
-    update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params)
+    grads = tf.gradients(loss, train_params)
+    grads, _ = tf.clip_by_global_norm(grads, 5.0)
+    grads_params = list(zip(grads, train_params))
+    grads_params_ex_emb = [(g,p) for (g,p) in grads_params if not p.name.endswith("E_fix")]
+
+    update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params)
+    update_exclude_embeddings = tf.train.AdamOptimizer(learning_rate, beta1=0.0).apply_gradients(grads_params_ex_emb)
     return {"idsA":idsA, "idsB":idsB, "lengthsA":lengthsA, "lengthsB":lengthsB, "y":y,
             "probs":probs, "scores":scores,"keep_prob": keep_prob_var,
-            "loss":loss, "update":update}
+            "loss":loss, "update":update, "update_ex":update_exclude_embeddings}
 
 
 if __name__ == "__main__":
@@ -392,7 +431,7 @@ if __name__ == "__main__":
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0, "Learning rate decay when loss on validation set does not improve.")
+    tf.app.flags.DEFINE_float("learning_rate_decay", 0.5, "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 50, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 3, "Minimum num of epochs")
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
@@ -403,13 +442,18 @@ if __name__ == "__main__":
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_integer('checkpoint', 1000, 'number of batches until checkpoint.')
+    tf.app.flags.DEFINE_integer('num_copies', 1, 'number of copies for associative RNN.')
+    tf.app.flags.DEFINE_integer('num_read_keys', 0, 'number of additional read keys for associative RNN.')
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
-    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
+    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace,diff,min,forget', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
                                                        "Defaults to 0 for each.")
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                      "and previous state. Given a positive integer, an additional"
                                                      "recurrent op ctr is introduced in MORUCell.")
+    tf.app.flags.DEFINE_boolean('eval', False, 'only evaluation')
+    tf.app.flags.DEFINE_string('model_path', '/tmp/snli-model', 'only evaluation')
+    tf.app.flags.DEFINE_string('device', '/gpu:0', 'device to run on')
 
     FLAGS = tf.app.flags.FLAGS
 
@@ -417,9 +461,9 @@ if __name__ == "__main__":
     if FLAGS.embedding_format == "glove":
         kwargs = {"vocab_size": 2196017, "dim": 300}
 
-    print "Loading embeddings..."
+    print("Loading embeddings...")
     e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
-    print "Done."
+    print("Done.")
 
 
     import json

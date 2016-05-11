@@ -89,7 +89,7 @@ def training(FLAGS):
     best_dev_acc = 0.0
     train_acc_for_best_dev = 0.0
 
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
         with tf.Session() as sess:
             tf.set_random_seed(rng.randint(0, 10000))
@@ -314,14 +314,14 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
     ids = np.ones([max_length, max_batch_size], np.int32) if ids is None else ids
     lengths = np.zeros([max_batch_size], np.int32) if lengths is None else lengths
 
-    for i in xrange(len(batch)):
+    for i in range(len(batch)):
         seq, seq_ids, label = batch[i]
         lengths[i] = len(seq)
         #print(seq)
         #print(seq_ids)
         #print(label)
-        for j in xrange(lengths[i]):
-            for k in xrange(embedding_size):
+        for j in range(lengths[i]):
+            for k in range(embedding_size):
                 inp[j][i] = seq[j]
             ids[j][i] = seq_ids[j]
     return inp, ids, lengths
@@ -358,7 +358,7 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
                 init_state = tf.reshape(init_state, [-1, cell.state_size])
 
             inps = tf.split(0, length, inp)
-            for i in xrange(length):
+            for i in range(length):
                 inps[i] = tf.squeeze(inps[i], [0])
                 
             print(cell, inps, init_state)    
@@ -442,9 +442,9 @@ if __name__ == "__main__":
     #if FLAGS.embedding_format == "glove":
     #    kwargs = {"vocab_size": 2196017, "dim": 300}
 
-    #print "Loading embeddings..."
+    #print("Loading embeddings...")
     #e = util.load_embeddings(FLAGS.embedding_file, FLAGS.embedding_format)
-    #print "Done."
+    #print("Done.")
 
     import json
     print("Configuration: ")

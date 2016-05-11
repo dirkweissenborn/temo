@@ -160,6 +160,8 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                      "and previous state. Given a positive integer, an additional"
                                                      "recurrent op ctr is introduced in MORUCell.")
+    tf.app.flags.DEFINE_string('device', '/gpu:0', 'device to run on')
+
 
     FLAGS = tf.app.flags.FLAGS
     eval_FLAGS = copy.deepcopy(FLAGS)
@@ -168,20 +170,21 @@ if __name__ == "__main__":
     perplexities = []
 
     rng = random.Random(FLAGS.seed)
-    for run_id in xrange(FLAGS.runs):
+    for run_id in range(FLAGS.runs):
         tf.reset_default_graph()
         last_valid_perplexities = [float("inf")] * 3
-        with tf.Session() as sess:
+        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             tf.set_random_seed(rng.randint(0, 10000))
             initializer = tf.random_uniform_initializer(-FLAGS.init_scale,
                                                         FLAGS.init_scale)
-            with tf.variable_scope("model", reuse=None, initializer=initializer):
-                m = PTBModel(is_training=True, FLAGS=FLAGS)
-            with tf.variable_scope("model", reuse=True, initializer=initializer):
-                mvalid = PTBModel(is_training=False, FLAGS=FLAGS)
-                eval_FLAGS.batch_size = 1
-                eval_FLAGS.num_steps = 1
-                mtest = PTBModel(is_training=False, FLAGS=eval_FLAGS)
+            with tf.device(FLAGS.device):
+                with tf.variable_scope("model", reuse=None, initializer=initializer):
+                    m = PTBModel(is_training=True, FLAGS=FLAGS)
+                with tf.variable_scope("model", reuse=True, initializer=initializer):
+                    mvalid = PTBModel(is_training=False, FLAGS=FLAGS)
+                    eval_FLAGS.batch_size = 1
+                    eval_FLAGS.num_steps = 1
+                    mtest = PTBModel(is_training=False, FLAGS=eval_FLAGS)
 
             tf.initialize_all_variables().run()
             saver = tf.train.Saver(tf.trainable_variables())
@@ -209,9 +212,9 @@ if __name__ == "__main__":
             saver.restore(sess, '/tmp/my-model')
             test_perplexity = run_epoch(sess, mtest, test_data, tf.no_op())
             perplexities.append(test_perplexity)
-            print '######## Run %d #########' % run_id
+            print('######## Run %d #########' % run_id)
             print("Test Perplexity: %.3f" % test_perplexity)
-            print '########################'
+            print('########################')
             os.remove('/tmp/my-model')
 
     mean_perplexities = sum(perplexities) / len(perplexities)
@@ -230,6 +233,6 @@ if __name__ == "__main__":
             f.write("Configuration: \n")
             f.write(json.dumps(FLAGS.__flags, sort_keys=True, indent=2, separators=(',', ': ')))
 
-    print '######## Overall #########'
-    print 'Test Perplexity: %.4f (%.4f)' % (mean_perplexities, s_dev(mean_perplexities, perplexities))
-    print '########################'
+    print('######## Overall #########')
+    print('Test Perplexity: %.4f (%.4f)' % (mean_perplexities, s_dev(mean_perplexities, perplexities)))
+    print('########################')
