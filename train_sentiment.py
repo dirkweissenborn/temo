@@ -201,7 +201,7 @@ def training(embeddings, FLAGS):
                     train_accuracy = 0.0
                     if acc > accuracy:
                         accuracy = acc
-                        saver.save(sess, '/tmp/my-model')
+                        saver.save(sess, FLAGS.model_path)
                     else:
                         if FLAGS.learning_rate_decay < 1.0:
                             print("Decaying learning rate.")
@@ -210,7 +210,7 @@ def training(embeddings, FLAGS):
                         if epochs >= FLAGS.min_epochs:
                             break
 
-            saver.restore(sess, '/tmp/my-model')
+            saver.restore(sess, FLAGS.model_path)
             sess.run(model["keep_prob"].assign(1.0))
             acc = evaluate(test)
             accuracies.append(acc)
@@ -391,6 +391,8 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                  "and previous state. Given a positive integer, an additional"
                                                  "recurrent op ctr is introduced in MORUCell.")
+    tf.app.flags.DEFINE_string("model_path", '/tmp/sentiment.tf', "path to model.")
+
     tf.app.flags.DEFINE_string('device', '/gpu:0', 'device to run on')
 
     FLAGS = tf.app.flags.FLAGS
