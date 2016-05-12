@@ -171,7 +171,7 @@ def training(embeddings, FLAGS):
 
 
                 train_labels = encode_labels(shuffled[offset:offset+batch_size], FLAGS.binary)
-                l, ps, _ = sess.run([model["loss"], model["probs"], model["update"]],
+                l, ps, _ = sess.run([model["loss"], model["scores"], model["update"]],
                                     feed_dict={model["inp"]: inp,
                                                model["ids"]: ids,
                                                model["lengths"]: lengths,
@@ -318,11 +318,12 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
 
         def my_rnn(inp, ids, cell, length, embeddings, rev=False, init_state=None):
             if ids is not None:
-                E = tf.get_variable("E_w", initializer=tf.identity(embeddings), trainable=True)
-                if inp:
-                    inp = tf.concat(2, [tf.nn.embedding_lookup(E, ids), inp])
-                else:
-                    inp = tf.nn.embedding_lookup(E, ids)
+                with tf.device("/cpu:0"):
+                    E = tf.get_variable("E_w", initializer=tf.identity(embeddings), trainable=True)
+                    if inp:
+                        inp = tf.concat(2, [tf.nn.embedding_lookup(E, ids), inp])
+                    else:
+                        inp = tf.nn.embedding_lookup(E, ids)
 
             if init_state is None:
                 init_state = tf.get_variable("init_state", [cell.state_size], tf.float32)
@@ -370,7 +371,7 @@ if __name__ == "__main__":
     # training
     tf.app.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate.")
     tf.app.flags.DEFINE_float("l2_lambda", 0, "L2-regularization raten (only for batch training).")
-    tf.app.flags.DEFINE_float("learning_rate_decay", 0.9,
+    tf.app.flags.DEFINE_float("learning_rate_decay", 1.0,
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 2, "Minimum num of epochs")
