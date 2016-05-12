@@ -387,7 +387,7 @@ if __name__ == "__main__":
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
-    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace', "operations of moru cell.")
+    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace,diff,min,forget', "operations of moru cell.")
     tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
                                                        "Defaults to 0 for each.")
     tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
