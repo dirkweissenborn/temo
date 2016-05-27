@@ -123,6 +123,12 @@ def training(FLAGS):
                 e_off = 0
                 accuracy = 0.0
                 op_weights_monitor = {w.name[-11:]:[] for w in op_weights}
+
+                num_ops = len(FLAGS.moru_ops.split(","))
+                # [num_symbols x num_ops]
+                weights_summary = np.zeros([len(vocab), num_ops])
+                print("[num_symbols x num_ops]", weights_summary.shape)
+
                 while e_off < len(ds):
                     inp, ids, lengths = batchify(ds[e_off:e_off + batch_size],
                                                  vocab["<padding>"],
@@ -145,24 +151,37 @@ def training(FLAGS):
                                                                    :size]})
 
                     weights = result[1:]
-                    print("ids shape: ", ids.shape)
-                    print("weights shape: (" + str(len(weights)) +
-                          ", " + str(len(weights[0])) +
-                          ", " + str(len(weights[0][0])) +")")
-                    # ids: 9 × 50
-                    # weights: 42 × 50 × 8
-                    # todo: unclear why 42? which weight corresponds to which op?
 
-                    for i in range(0, batch_size):
-                        print(i)
-                        print("symbols")
-                        for j in range(0, len(ids)):
-                            print(ids[j][i])
-                        print("weights")
-                        for j in range(0, len(weights)):
-                            print(len(weights[j][i]))
-                        print()
-                    os._exit(0)
+                    # ids: seq_length x batch_size
+                    # weights: (ops x min_seq_length) x batch_size x k
+                    #print("ids shape: ", ids.shape)
+                    #print("weights shape: (" + str(len(weights)) +
+                    #      ", " + str(len(weights[0])) +
+                    #      ", " + str(len(weights[0][0])) + ")")
+
+
+
+                    min_length = np.min(lengths)
+
+                    #print("min_length", min_length)
+                    #print("num_ops", num_ops)
+                    #print(len(op_weights))
+                    #print([w.name for w in op_weights])
+
+                    for t in range(0, min_length):
+                        # [batch_size]
+                        le_ids = ids[t, :]
+                        #print("ids", len(le_ids))
+                        # [ops x batch_size x k]
+                        le_weights = weights[t*num_ops:(t+1)*num_ops]
+                        #print("weights", len(le_weights), len(le_weights[0]), len(le_weights[0][0]))
+                        #print("weights", weights.shape)
+
+                        for i in range(len(le_ids)):
+                            le_id = le_ids[i]
+                            #print(le_id)
+                            for le_op in range(len(le_weights)):
+                                weights_summary[le_id][le_op] += sum(weights[le_op][i])
 
                     y = encode_labels(ds[e_off:e_off + batch_size], FLAGS.binary)
                     accuracy += np.sum(np.equal(np.argmax(result[0], axis=1), y))
@@ -170,6 +189,8 @@ def training(FLAGS):
                         op_weights_monitor[w.name[-11:]].extend(probs.tolist())
 
                     e_off += batch_size
+
+                print(weights_summary)
 
                 accuracy = accuracy / len(ds)
 
