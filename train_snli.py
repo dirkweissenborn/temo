@@ -1,7 +1,7 @@
 import util
 import nltk
 import numpy as np
-from moru_cell import *
+from mufuru import *
 import random
 from sklearn.utils import shuffle
 import os
@@ -59,15 +59,15 @@ def training(embeddings, FLAGS):
 
             cellA = cellB = None
             if FLAGS.cell == 'LSTM':
-                cellA = cellB = BasicLSTMCell(mem_size, embedding_size)
+                cellA = cellB = BasicLSTMCell(mem_size)
             elif FLAGS.cell == 'GRU':
-                cellA = cellB = GRUCell(mem_size, embedding_size)
+                cellA = cellB = GRUCell(mem_size)
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cellA = cellB = MORUCell.from_op_names(ops, biases, mem_size, embedding_size, FLAGS.moru_op_ctr)
+                cellA = cellB = MuFuRUCell.from_op_names(ops, mem_size, biases, FLAGS.moru_op_ctr)
 
             tunable_embeddings, fixed_embeddings = task_embeddings, None
             if FLAGS.embedding_mode == "fixed":

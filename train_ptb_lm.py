@@ -1,4 +1,4 @@
-from moru_cell import *
+from mufuru import *
 import numpy as np
 import random
 import time
@@ -32,7 +32,7 @@ class PTBModel(object):
             if biases is not None:
                 biases = map(lambda s: float(s), biases.split(","))
             ops = FLAGS.moru_ops.split(",")
-            cell = MORUCell.from_op_names(ops, biases, mem_size, op_controller_size=FLAGS.moru_op_ctr)
+            cell = MuFuRUCell.from_op_names(ops, mem_size, biases, op_controller_size=FLAGS.moru_op_ctr)
 
         if FLAGS.num_layers > 1:
             cell = tf.nn.rnn_cell.MultiRNNCell([cell] * FLAGS.num_layers)

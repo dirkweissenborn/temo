@@ -1,5 +1,5 @@
 import util
-from moru_cell import *
+from mufuru import *
 import random
 from sklearn.utils import shuffle
 from tensorflow.python.ops.rnn import rnn
@@ -96,15 +96,15 @@ def training(embeddings, FLAGS):
             if FLAGS.embedding_mode == "combined":
                 input_size = embedding_size + task_embeddings.shape[1]
             if FLAGS.cell == 'LSTM':
-                cell = BasicLSTMCell(mem_size, input_size=input_size)
+                cell = BasicLSTMCell(mem_size)
             elif FLAGS.cell == 'GRU':
-                cell = GRUCell(mem_size, input_size)
+                cell = GRUCell(mem_size)
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
                     biases = [float(s) for s in biases.split(",")]
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cell = MuFuRUCell.from_op_names(ops, mem_size, biases, FLAGS.moru_op_ctr)
 
 
             nclasses = 2 if FLAGS.binary else 5

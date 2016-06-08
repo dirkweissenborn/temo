@@ -1,7 +1,7 @@
 import util
 import nltk
 import numpy as np
-from moru_cell import *
+from mufuru import *
 import random
 from sklearn.utils import shuffle
 from sklearn.metrics import mean_squared_error as mse
@@ -92,15 +92,15 @@ def training(embeddings, FLAGS):
                 input_size = embedding_size + task_embeddings.shape[1]
             cell = None
             if FLAGS.cell == 'LSTM':
-                cell = BasicLSTMCell(mem_size, embedding_size)
+                cell = BasicLSTMCell(mem_size)
             elif FLAGS.cell == 'GRU':
-                cell = GRUCell(mem_size, embedding_size)
+                cell = GRUCell(mem_size)
             elif FLAGS.cell == 'MORU':
                 biases = FLAGS.moru_op_biases
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cell = MuFuRUCell.from_op_names(ops, mem_size, biases, FLAGS.moru_op_ctr)
 
             model = create_model(max_l, l2_lambda, learning_rate, h_size, cell, task_embeddings,
                                  FLAGS.embedding_mode, FLAGS.keep_prob)
