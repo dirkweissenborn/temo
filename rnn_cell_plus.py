@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.models.rnn.rnn_cell import *
+from tensorflow.python.ops.rnn_cell import *
 import random
 import functools
 
@@ -13,46 +13,54 @@ _operations = {"max": lambda s, v: tf.maximum(s, v),
                "sqr_diff": lambda s, v: 0.25 * (s - v)**2}
 
 
-class MORUCell(RNNCell):
+class MuFuRUCell(RNNCell):
 
-    def __init__(self, num_units, input_size=None,
-                 op_controller_size=None,
+    def __init__(self, num_units, op_controller_size=None,
                  ops=(_operations["keep"], _operations["replace"], _operations["mul"]),
                  op_biases=None):
+        """
+        :param num_units: number of hidden units
+        :param op_controller_size: if > 0 then use of recurrent controller for computing operation weights
+        :param ops: list of operations as python function objects with input parameters s
+                    (representing the old memory state) and v (representing the newly computed feature vector)
+        :param op_biases: optional, can be used to set initial bias on specific operations
+        """
         self._num_units = num_units
-        self._input_size = num_units if input_size is None else input_size
         self._op_controller_size = 0 if op_controller_size is None else op_controller_size
         self._op_biases = list(op_biases)
         self._ops = ops if ops is not None else list(map(lambda _: 0.0, ops))
         self._num_ops = len(ops)
 
     @staticmethod
-    def from_op_names(operations, biases, num_units, input_size=None, op_controller_size=None):
+    def from_op_names(operations, num_units, biases=None, op_controller_size=None):
+        """
+        factory method to create MuFuRU from operation names
+        :param operations: list of names of operations from following:
+                           "max", "keep", "replace", "mul", "min", "diff", "forget", "sqr_diff"
+        :param num_units: number of hidden units
+        :param biases:  optional, can be used to set initial bias on specific operations
+        :param op_controller_size:
+        :return: MuFuRUCell
+        """
         if biases is None:
             biases = map(lambda _: 0.0, operations)
         assert len(list(biases)) == len(operations), "Operations and operation biases have to have same length."
         ops = list(map(lambda op: _operations[op], operations))
-        return MORUCell(num_units, input_size, op_controller_size, ops, biases)
+        return MuFuRUCell(num_units, op_controller_size, ops, biases)
 
     def _op_weights(self, inputs):
-        t = tf.reshape(linear(inputs, self._num_units * self._num_ops, True), [-1, self._num_units, self._num_ops])
-        weights = tf.split(2, self._num_ops, t)
-        #op_sharpening = tf.get_variable("gamma", (), tf.float32, initializer=tf.constant_initializer(1.0), trainable=False)
+        # compute unnormalized operation weights
+        t = tf.contrib.layers.fully_connected(inputs, self._num_units * self._num_ops, activation_fn=None)
+        # compute softmax, using tf.nn.softmax was much slower than the following code
+        weights = tf.split(1, self._num_ops, t)
         for i, w in enumerate(weights):
             if self._op_biases and self._op_biases[i] != 0.0:
                 weights[i] = tf.exp((w + self._op_biases[i]))
             else:
                 weights[i] = tf.exp(w)
-        #tf.softmax is incredibly slow, as well as reduce_sum
-        acc = weights[0]
-        for w in weights[1:]:
-            acc += w
-        weights = [tf.reshape(weights[i]/acc, [-1, self._num_units], name="op_weight_%d"%i) for i in range(len(weights))]
+        acc = tf.add_n(weights)
+        weights = [tf.div(weights[i], acc, name="op_weight_%d" % i) for i in range(len(weights))]
         return weights
-
-    @property
-    def input_size(self):
-        return self._input_size
 
     @property
     def output_size(self):
@@ -63,53 +71,69 @@ class MORUCell(RNNCell):
         return self._num_units + max(self._op_controller_size, 0)
 
     def __call__(self, inputs, state, scope=None):
-        """Gated recurrent unit (GRU) with nunits cells."""
-        with vs.variable_scope(scope or type(self).__name__):  # "GRUCell"
+        """The Multi-Function Recurrent Unit (MuFuRUCell)"""
+        with vs.variable_scope(scope or type(self).__name__):
             s, op_ctr = None, None
             if self._op_controller_size > 0:
-                s = tf.slice(state, [0, 0], [-1, self._num_units])
-                op_ctr = tf.slice(state, [0, self._num_units], [-1, self._op_controller_size])
+                op_ctr = tf.slice(state, [0, 0], [-1, self._op_controller_size])
+                s = tf.slice(state, [0, self._op_controller_size], [-1, self._num_units])
             else:
                 s = state
-            with vs.variable_scope("Gates"):  # Reset gate and update gate.
+            with vs.variable_scope("Gate"):  # Reset gate and update gate.
                 # We start with bias of 1.0 to not reset and not udpate.
-                r = linear([inputs, s], self._num_units, True, 1.0)
-                r = sigmoid(r)
+                r = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, s]), self._num_units,
+                                                      activation_fn=tf.nn.sigmoid,
+                                                      biases_initializer=tf.constant_initializer(1.0))
             with vs.variable_scope("Feature"):
-                f = tanh(linear([inputs, r * s], self._num_units, True))
+                f = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, r * s]), activation_fn=tf.nn.sigmoid)
             new_op_ctr = None
             if self._op_controller_size > 0:
                 with vs.variable_scope("Op_controller"):
-                    new_op_ctr = [tanh(linear([inputs, s, op_ctr], self._op_controller_size, True))]
+                    # ReLU activation
+                    new_op_ctr = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, s, op_ctr]),
+                                                                   self._op_controller_size)
             else:
-                new_op_ctr = [inputs, s]
+                new_op_ctr = tf.concat(1, [inputs, s])
             with vs.variable_scope("Op"):
+                # compute operation weights
                 op_weights = self._op_weights(new_op_ctr)
+                # compute weighted features
                 new_cs = [o(s, f) * w for (o, w) in zip(self._ops, op_weights)]
-                new_c = tf.reduce_sum(tf.pack(new_cs), [0])
+                new_c = tf.add_n(new_cs)
         if self._op_controller_size > 0:
-            return new_c, tf.concat(1, [new_c, new_op_ctr])
+            # include also controller within recurrent state
+            return new_c, tf.concat(1, [new_op_ctr, new_c])
         else:
             return new_c, new_c
 
 
 class AssociativeGRUCell(RNNCell):
+    """
+    An RNNCell that keeps a complex redundant associative memory arrays which can be read from or written to.
 
-    def __init__(self, num_units, num_copies=1, input_size=None, num_read_keys=0, read_only=False, rng=None):
+    It is recommended to use this cell wrapped in a SelfControllerCell. If used in this setup you can retrieve
+    the redundant memory arrays by slicing the final state of the SelfControllerCell from [0,0]
+    to [-1,num_units*num_copies]. This can be used for example to initialize the state of the DualAssociativeGRUCell.
+    """
+
+    def __init__(self, num_units, num_copies=1, num_read_keys=0, read_only=False, rng=None):
+        """
+        :param num_units: number of hidden units
+        :param num_copies: number of redundant copies (the more the preciser the retrieval but slower)
+        :param num_read_keys: number of keys used to read from the associative memory, we always read from the
+        write location so actual reads are num_read_keys + 1
+        :param read_only: if read only, no updates are performed on the memory array
+        :param rng: optional,
+        """
         if rng is None:
             rng = random.Random(123)
         self._num_units = num_units
-        self._input_size = num_units if input_size is None else input_size
         self._num_copies = num_copies
         self._num_read_keys = num_read_keys
         self._read_only = read_only
         self._permutations = [list(range(0, int(num_units/2))) for _ in range(self._num_copies-1)]
         for perm in self._permutations:
             rng.shuffle(perm)
-
-    @property
-    def input_size(self):
-        return self._input_size
 
     @property
     def output_size(self):
@@ -129,7 +153,9 @@ class AssociativeGRUCell(RNNCell):
             old_ss = state
             c_ss = complexify(old_ss)
             with vs.variable_scope("Keys"):
-                key = bound(complexify(linear([inputs], (1+self._num_read_keys)*self._num_units, False)))
+                key = bound(complexify(tf.contrib.layers.fully_connected(inputs,
+                                                                         (1+self._num_read_keys)*self._num_units,
+                                                                         activation_fn=None, biases_initializer=None)))
                 k = [_comp_real(key), _comp_imag(key)]
                 if self._num_copies > 1:
                     if self._num_read_keys > 0:
@@ -156,11 +182,13 @@ class AssociativeGRUCell(RNNCell):
             if not self._read_only:
                 with vs.variable_scope("Gates"):  # Reset gate and update gate.
                     # We start with bias of 1.0 to not reset and not update.
-                    r, u = array_ops.split(1, 2, linear(r_hs + [inputs, h],
-                                                         2 * self._num_units, True, 1.0))
-                    r, u = sigmoid(r), sigmoid(u)
+                    gates = tf.contrib.layers.fully_connected(tf.concat(1, r_hs + [inputs, h]), 2 * self._num_units,
+                                                              activation_fn=tf.sigmoid,
+                                                              biases_initializer=tf.constant_initializer(1.0))
+                    r, u = array_ops.split(1, 2, gates)
                 with vs.variable_scope("Candidate"):
-                    c = tanh(linear(r_hs + [inputs, r * h], self._num_units, True))
+                    c = tf.contrib.layers.fully_connected(tf.concat(1, r_hs + [inputs, r * h]), self._num_units,
+                                                          activation_fn=tf.tanh)
 
                 to_add = u * (c - h)
                 to_add_r, to_add_i = tf.split(1, 2, to_add)
@@ -182,107 +210,31 @@ class AssociativeGRUCell(RNNCell):
         return read
 
 
-class ControllerWrapper(RNNCell):
-
-    def __init__(self, controller_cell, cell, output_proj=None, out_size=None):
-        self._cell = cell
-        self._controller_cell = controller_cell
-        self._output_proj = output_proj
-        self._out_size = out_size
-
-    @property
-    def output_size(self):
-        if self._out_size is None:
-            return self._controller_cell.output_size + self._cell.output_size
-        else:
-            return self._out_size
-
-    def __call__(self, inputs, state, scope=None):
-        ctr_state = tf.slice(state, [0, 0], [-1,self._controller_cell.state_size])
-        inner_state = None
-        if self._cell.state_size > 0:
-            inner_state = tf.slice(state, [0, self._controller_cell.state_size], [-1, self._cell.state_size])
-        inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size], [-1,-1])
-        inputs = tf.concat(1, [inputs, inner_out])
-        ctr_out, ctr_state = self._controller_cell(inputs, ctr_state)
-        inner_out, inner_state = self._cell(ctr_out, inner_state)
-        out = tf.concat(1, [ctr_out, inner_out])
-        if self._output_proj is not None:
-            with tf.variable_scope("Output_Projection"):
-                out = self._output_proj(out, self.output_size)
-        if self._cell.state_size > 0:
-            return out, tf.concat(1, [ctr_state, inner_state, inner_out])
-        else:
-            return out, tf.concat(1, [ctr_state, inner_out])
-
-    def zero_state(self, batch_size, dtype):
-        if self._cell.state_size > 0:
-            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), self._cell.zero_state(batch_size, dtype),
-                             tf.zeros([batch_size,self._cell.output_size]),tf.float32])
-        else:
-            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
-
-    @property
-    def input_size(self):
-        return self._controller_cell.input_size
-
-    @property
-    def state_size(self):
-        return self._controller_cell.state_size + self._cell.state_size + self._cell.output_size
-
-
-class SelfControllerWrapper(RNNCell):
-
-    def __init__(self, cell, input_size, output_proj=None, out_size=None):
-        self._cell = cell
-        self._output_proj = output_proj
-        self._input_size = input_size
-        self._out_size = out_size
-
-    @property
-    def output_size(self):
-        if self._out_size is None:
-            return self._cell.output_size
-        else:
-            return self._out_size
-
-    def __call__(self, inputs, state, scope=None):
-        prev_state = None
-        if self._cell.state_size > 0:
-            prev_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
-        prev_out = tf.slice(state, [0, self._cell.state_size], [-1, self._cell.output_size])
-        inputs = tf.concat(1, [inputs, prev_out])
-        new_out, prev_state = self._cell(inputs, prev_state)
-        out = new_out
-        if self._output_proj is not None:
-            with tf.variable_scope("Output_Projection"):
-                out = self._output_proj(out, self.output_size)
-        if self._cell.state_size > 0:
-            return out, tf.concat(1, [prev_state, new_out])
-        else:
-            return out, new_out
-
-    def zero_state(self, batch_size, dtype):
-        if self._cell.state_size > 0:
-            return tf.concat(1, [self._cell.zero_state(batch_size, dtype), tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)])
-        else:
-            return tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)
-
-    @property
-    def input_size(self):
-        return self._input_size
-
-    @property
-    def state_size(self):
-        return self._cell.state_size + self._cell.output_size
-
 class DualAssociativeGRUCell(AssociativeGRUCell):
+    """
+    To make use of the DualAssociativeGRUCell, the initial state should be composed of the an arbitrary associative
+    memory with its redundant copies (e.g., [B, num_units * num_copies]-0-tensor) concatenated with the
+    associative memories to read from with their respective copies
+    (num_read_mems x [B, num_units * num_copies]-tensors that can be retrieved from final state of another
+    AssociativeGRUCell.
 
-    def __init__(self, num_units, num_read_mems=1, num_copies=1, input_size=None, share_key=False,
+    It is recommended to use this cell wrapped in a SelfControllerCell.
+    """
+
+    def __init__(self, num_units, num_read_mems=1, num_copies=1, share_key=False,
                  num_read_keys=0, read_only=False, rng=None):
+        """
+        :param num_units: number of hidden units
+        :param num_read_mems: number of memories to read from
+        :param num_copies: number of redundant copies (the more the preciser the retrieval but slower)
+        :param num_read_keys: number of keys used to read from the associative memory, we always read from the
+        write location so actual reads are num_read_keys + 1
+        :param read_only: if read only, no updates are performed on the memory array
+        :param rng: optional, must be equal to the rng used to create read-only memories used for dual access
+        """
         self._num_read_mems = num_read_mems
         self._share_key = share_key
-        AssociativeGRUCell.__init__(self, num_units, num_copies, input_size, num_read_keys, read_only, rng)
+        AssociativeGRUCell.__init__(self, num_units, num_copies, num_read_keys, read_only, rng)
 
     @property
     def state_size(self):
@@ -308,11 +260,13 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                 if not self._share_key:
                     num_keys += self._num_read_mems
 
-                key1 = linear([inputs], (1+self._num_read_keys)*self._num_units, False)
+                key1 = tf.contrib.layers.fully_connected(inputs, (1+self._num_read_keys)*self._num_units,
+                                                         activation_fn=None, biases_initializer=None)
                 with vs.variable_scope("Dual"):
                     vs.get_variable_scope()._reuse = \
                         any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())
-                    key2 = linear([inputs], self._num_read_mems*self._num_units, False)
+                    key2 = tf.contrib.layers.fully_connected(inputs, self._num_read_mems*self._num_units,
+                                                             activation_fn=None, biases_initializer=None)
                 key = bound(complexify(tf.concat(1, [key1, key2])))
 
                 k = [_comp_real(key), _comp_imag(key)]
@@ -350,20 +304,31 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
                     h2 = uncomplexify(self._read(dual_keys[0], complexify(read_mems[0])), "retrieved")
 
             with vs.variable_scope("Gates"):
-                gs = linear(r_hs + [inputs, h], 2 * self._num_units, True, 1.0)
+                gates = tf.contrib.layers.fully_connected(tf.concat(1, r_hs + [inputs, h]), 2 * self._num_units,
+                                                          activation_fn=None,
+                                                          biases_initializer=tf.constant_initializer(1.0))
             with vs.variable_scope("DualGates"):
+                # HACK to make it possible to share all non-dual variables between
+                # AssociativeGRUCell and DualAssociativeGRUCell
                 vs.get_variable_scope()._reuse = \
                     any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())
-                gs = sigmoid(gs + linear([h2], 2 * self._num_units, False))
-            r, u = tf.split(1, 2, gs)
+                gates = sigmoid(gates + tf.contrib.layers.fully_connected(h2, 2 * self._num_units,
+                                                                          activation_fn=None,
+                                                                          biases_initializer=None))
+            r, u = tf.split(1, 2, gates)
 
             with vs.variable_scope("Candidate"):
-                c = linear(r_hs + [inputs, r * h], self._num_units, True)
+                c = tf.contrib.layers.fully_connected(tf.concat(1, r_hs + [inputs, r * h]), self._num_units,
+                                                      activation_fn=None)
 
             with vs.variable_scope("DualCandidate"):
+                # HACK to make it possible to share all non-dual variables between
+                # AssociativeGRUCell and DualAssociativeGRUCell
                 vs.get_variable_scope()._reuse = \
                     any(vs.get_variable_scope().name in v.name for v in tf.trainable_variables())  # HACK
-                c = tanh(c + linear([h2], self._num_units, False))
+                dual_c = tf.contrib.layers.fully_connected(h2, self._num_units, activation_fn=None,
+                                                           biases_initializer=None)
+                c = tanh(c + dual_c)
 
             to_add = u * (c - h)
             to_add_r, to_add_i = tf.split(1, 2, to_add)
@@ -374,16 +339,137 @@ class DualAssociativeGRUCell(AssociativeGRUCell):
         return new_h, tf.concat(1, [new_ss, dual_mem])
 
 
-#use with controller
-class AttentionCell(RNNCell):
+class ControllerWrapper(RNNCell):
+    """
+    A ControllerWrapper wraps a controller RNNCell and controlled RNNCell. The controller cell pre-processes
+    the current input and latest output of the controlled cell and feeds its output to the controlled cell.
+    Like this Attention can be realized using the AttentionCell as controlled cell and another RNNCell as
+    controller cell. The output of this wrapper is the concatenation of the controller cell output and the
+    controlled cell output. This output can also be projected via a output projection function.
+    """
 
-    def __init__(self, attention_states, attention_length, input_size=None, num_heads=1):
+    def __init__(self, controller_cell, cell, output_proj=None, out_size=None):
+        """
+
+        :param controller_cell: controller that controls the input to the cell
+        :param cell: controlled cell, typically some form of memory
+        :param output_proj: optional, function applied to the output of this cell to form new output
+        :param out_size: optional, size of the respective output when using output_proj
+        :return:
+        """
+        self._cell = cell
+        self._controller_cell = controller_cell
+        self._output_proj = output_proj
+        self._out_size = out_size
+
+    @property
+    def output_size(self):
+        if self._out_size is None:
+            return self._controller_cell.output_size + self._cell.output_size
+        else:
+            return self._out_size
+
+    def __call__(self, inputs, state, scope=None):
+        ctr_state = tf.slice(state, [0, 0], [-1, self._controller_cell.state_size])
+        inner_state = None
+        if self._cell.state_size > 0:
+            inner_state = tf.slice(state, [0, self._controller_cell.state_size], [-1, self._cell.state_size])
+        inner_out = tf.slice(state, [0, self._controller_cell.state_size+self._cell.state_size], [-1,-1])
+        inputs = tf.concat(1, [inputs, inner_out])
+        ctr_out, ctr_state = self._controller_cell(inputs, ctr_state)
+        inner_out, inner_state = self._cell(ctr_out, inner_state)
+        out = tf.concat(1, [ctr_out, inner_out])
+        if self._output_proj is not None:
+            with tf.variable_scope("Output_Projection"):
+                out = self._output_proj(out, self.output_size)
+        if self._cell.state_size > 0:
+            return out, tf.concat(1, [ctr_state, inner_state, inner_out])
+        else:
+            return out, tf.concat(1, [ctr_state, inner_out])
+
+    def zero_state(self, batch_size, dtype):
+        if self._cell.state_size > 0:
+            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), self._cell.zero_state(batch_size, dtype),
+                             tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+        else:
+            return tf.concat(1, [self._controller_cell.zero_state(batch_size, dtype), tf.zeros([batch_size,self._cell.output_size]),tf.float32])
+
+    @property
+    def state_size(self):
+        return self._controller_cell.state_size + self._cell.state_size + self._cell.output_size
+
+
+class SelfControllerWrapper(RNNCell):
+    """
+    A SelfControllerWrapper wraps a RNNCell that controls itself. It basically concatenates its last output
+    with the current input and feeds it as input to the wrapped cell. It is useful for example in combination
+    with the (Dual)AssociativeGRUCell which doesn't reuse its previous output recurrently by itself. Other
+    RNNCells like the GRU or LSTM already reuse their last outputs so this wrapper would not help there.
+    This output can also be projected via a output projection function.
+    """
+
+    def __init__(self, cell, output_proj=None, out_size=None):
+        """
+        :param cell: the self-controlled RNNCell
+        :param output_proj: optional, function applied to the output of this cell to form new output
+        :param out_size: optional, size of the respective output when using output_proj
+        :return:
+        """
+        self._cell = cell
+        self._output_proj = output_proj
+        self._out_size = out_size
+
+    @property
+    def output_size(self):
+        if self._out_size is None:
+            return self._cell.output_size
+        else:
+            return self._out_size
+
+    def __call__(self, inputs, state, scope=None):
+        prev_state = None
+        if self._cell.state_size > 0:
+            prev_state = tf.slice(state, [0, 0], [-1, self._cell.state_size])
+        prev_out = tf.slice(state, [0, self._cell.state_size], [-1, self._cell.output_size])
+        inputs = tf.concat(1, [inputs, prev_out])
+        new_out, prev_state = self._cell(inputs, prev_state)
+        out = new_out
+        if self._output_proj is not None:
+            with tf.variable_scope("Output_Projection"):
+                out = self._output_proj(out, self.output_size)
+        if self._cell.state_size > 0:
+            return out, tf.concat(1, [prev_state, new_out])
+        else:
+            return out, new_out
+
+    def zero_state(self, batch_size, dtype):
+        if self._cell.state_size > 0:
+            return tf.concat(1, [self._cell.zero_state(batch_size, dtype), tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)])
+        else:
+            return tf.zeros(tf.pack([batch_size,self._cell.output_size]),tf.float32)
+
+    @property
+    def state_size(self):
+        return self._cell.state_size + self._cell.output_size
+
+
+class AttentionCell(RNNCell):
+    """
+    This RNNCell only makes sense in conjunction with ControllerWrapper
+    """
+
+    def __init__(self, attention_states, attention_length, num_heads=1):
+        """
+        :param attention_states: [B, L, S]-tensor, B-batch_size, L-attention-length, S-attention-size
+        :param attention_length: [B]-tensor, with batch-specific sequence-lengths to attend over
+        :param num_heads: number of attention read heads
+        :return:
+        """
         self._attention_states = attention_states
         self._attention_length = attention_length
         self._num_heads = num_heads
         self._hidden_features = None
         self._num_units = self._attention_states.get_shape()[2].value
-        self._input_size = input_size if input_size is not None else self._num_units
 
     @property
     def output_size(self):
@@ -413,9 +499,10 @@ class AttentionCell(RNNCell):
                           tf.pack([batch_size_scale, self._attn_length]))
 
         mask = tf.cast(tf.greater(mask, lengths), tf.float32) * -1000.0
+        # some parts are copied from tensorflow attention code-base
         for a in range(self._num_heads):
             with tf.variable_scope("Attention_%d" % a):
-                y = linear(inputs, self._num_units, True)
+                y = tf.contrib.layers.fully_connected(inputs, self._num_units, activation_fn=None)
                 y = array_ops.reshape(y, [-1, 1, 1, self._num_units])
                 # Attention mask is a softmax of v^T * tanh(...).
                 v = tf.get_variable("AttnV_%d" % a, [self._num_units])
@@ -437,55 +524,50 @@ class AttentionCell(RNNCell):
         return super().zero_state(batch_size, dtype)
 
     @property
-    def input_size(self):
-        return self._input_size
-
-    @property
     def state_size(self):
         return 0
 
 
-def complexify(v, name=None):
+### The following helper functions for complex array are much faster than using native tensorflow complex datastructure.
+
+def complexify(v):
     v_r, v_i = tf.split(1, 2, v)
-    return (v_r, v_i)
+    return v_r, v_i
 
 
 def uncomplexify(v, name=None):
     return tf.concat(1, v, name)
 
 
-def bound(v, name=None):
+def bound(v):
     im_v = _comp_imag(v)
     re_v = _comp_real(v)
     v_modulus = tf.maximum(1.0, tf.sqrt(im_v * im_v + re_v * re_v))
-    return (re_v / v_modulus, im_v / v_modulus, name)
+    return re_v / v_modulus, im_v / v_modulus
 
 
-# Much faster than using native tensorflow complex datastructure
 def _comp_conj(x):
-    return (_comp_real(x), -_comp_imag(x))
+    return _comp_real(x), -_comp_imag(x)
+
 
 def _comp_add(x, y):
-    return (_comp_real(x)+_comp_real(y), _comp_imag(x)+_comp_imag(y))
+    return _comp_real(x)+_comp_real(y), _comp_imag(x)+_comp_imag(y)
+
 
 def _comp_add_n(xs):
     xs_real = [_comp_real(x) for x in xs]
     xs_imag = [_comp_imag(x) for x in xs]
-    return (tf.add_n(xs_real), tf.add_n(xs_imag))
+    return tf.add_n(xs_real), tf.add_n(xs_imag)
+
 
 def _comp_mul(x, y):
-    return (_comp_real(x) * _comp_real(y) - _comp_imag(x) * _comp_imag(y),
-            _comp_real(x) * _comp_imag(y) + _comp_imag(x) * _comp_real(y))
+    return _comp_real(x) * _comp_real(y) - _comp_imag(x) * _comp_imag(y), \
+           _comp_real(x) * _comp_imag(y) + _comp_imag(x) * _comp_real(y)
+
 
 def _comp_real(x):
     return x[0]
 
+
 def _comp_imag(x):
     return x[1]
-
-
-class RectifierRNNCell(BasicRNNCell):
-    def __call__(self, inputs, state, scope=None):
-        with vs.variable_scope(scope or type(self).__name__):
-            output = tf.maximum(0, linear([inputs, state], self._num_units, True))
-        return output, output

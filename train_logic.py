@@ -104,7 +104,7 @@ def training(FLAGS):
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
                 print(ops)
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cell = MuFuRUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
 
             nclasses = 2 if FLAGS.binary else 5

@@ -100,7 +100,7 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cell = MuFuRUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
             elif FLAGS.cell == "AssociativeGRU":
                 cell = AssociativeGRUCell(mem_size, num_copies=4, input_size=input_size)
 

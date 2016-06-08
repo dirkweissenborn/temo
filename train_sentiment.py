@@ -104,7 +104,7 @@ def training(embeddings, FLAGS):
                 if biases is not None:
                     biases = map(lambda s: float(s), biases.split(","))
                 ops = FLAGS.moru_ops.split(",")
-                cell = MORUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
+                cell = MuFuRUCell.from_op_names(ops, biases, mem_size, input_size, FLAGS.moru_op_ctr)
 
 
             nclasses = 2 if FLAGS.binary else 5
