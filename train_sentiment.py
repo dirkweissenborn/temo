@@ -1,8 +1,10 @@
+import sys
+
 import util
 from mufuru import *
 import random
 from sklearn.utils import shuffle
-from tensorflow.python.ops.rnn import rnn
+from tensorflow.python.ops.rnn import dynamic_rnn
 import os
 import numpy as np
 import re
@@ -99,12 +101,14 @@ def training(embeddings, FLAGS):
                 cell = BasicLSTMCell(mem_size)
             elif FLAGS.cell == 'GRU':
                 cell = GRUCell(mem_size)
-            elif FLAGS.cell == 'MORU':
-                biases = FLAGS.moru_op_biases
+            elif FLAGS.cell == 'MUFURU':
+                biases = FLAGS.mufuru_op_biases
                 if biases is not None:
                     biases = [float(s) for s in biases.split(",")]
-                ops = FLAGS.moru_ops.split(",")
-                cell = MuFuRUCell.from_op_names(ops, mem_size, biases, FLAGS.moru_op_ctr)
+                ops = FLAGS.mufuru_ops.split(",")
+                cell = MuFuRUCell.from_op_names(ops, mem_size, biases, FLAGS.mufuru_op_ctr)
+            else:
+                raise Exception("%s is not a valid cell." % FLAGS.cell)
 
 
             nclasses = 2 if FLAGS.binary else 5
@@ -114,7 +118,7 @@ def training(embeddings, FLAGS):
                                      FLAGS.keep_prob, nclasses)
             tf.get_variable_scope().reuse_variables()
             op_weights = [w.outputs[0] for w in tf.get_default_graph().get_operations()
-                          if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MORU']
+                          if not "grad" in w.name and w.name[:-2].endswith("op_weight") and FLAGS.cell == 'MUFURU']
             def evaluate(ds):
                 inp, ids, lengths = None, None, None
                 e_off = 0
@@ -183,11 +187,14 @@ def training(embeddings, FLAGS):
 
                 loss += l
                 i += 1
+                sys.stdout.write("\r%.3f, %.3f" % (loss / i, train_accuracy / (i * batch_size)))
+
                 offset += batch_size
 
                 if offset+batch_size > len(shuffled):
                     offset = 0
                     epochs += 1
+                    print("")
                     print("%d epochs done!" % epochs)
                     shuffled = shuffle(shuffled, random_state=rng2.randint(0, 1000))
 
@@ -197,6 +204,7 @@ def training(embeddings, FLAGS):
                     acc = evaluate(dev)
                     train_accuracy /= (i * batch_size)
                     sess.run(model["keep_prob"].initializer)
+                    print("")
                     print("Train loss: %.3f, Accuracy: %.3f, Accuracy on Dev: %.3f" % (loss, train_accuracy, acc))
                     i = 0
                     loss = 0.0
@@ -304,9 +312,9 @@ def batchify(batch, padding, inp, ids, lengths, max_length=None, max_batch_size=
 
 # Create Model
 def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_mode, keep_prob, nclasses,
-                 initializer=tf.random_uniform_initializer(-0.05, 0.05)):
+                 initializer=tf.contrib.layers.xavier_initializer()):
     with tf.variable_scope("model", initializer=initializer):
-        embedding_size = cell.input_size - embeddings.shape[1] if embedding_mode == "combined" else cell.input_size
+        embedding_size = embeddings.shape[1]
         inp = tf.placeholder(tf.float32, [length, None, embedding_size])
         learning_rate = tf.get_variable("lr", (), tf.float32, tf.constant_initializer(learning_rate), trainable=False)
         batch_size = tf.cast(tf.gather(tf.shape(inp), [1]), tf.float32)
@@ -327,24 +335,25 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
                     else:
                         inp = tf.nn.embedding_lookup(E, ids)
 
-            if init_state is None:
-                init_state = tf.get_variable("init_state", [cell.state_size], tf.float32)
-                batch_size = tf.gather(tf.shape(inp), [1])
-                init_state = tf.tile(init_state, batch_size)
-                init_state = tf.reshape(init_state, [-1, cell.state_size])
+            #if init_state is None:
+            #    init_state = tf.get_variable("init_state", [cell.state_size], tf.float32)
+            #    batch_size = tf.gather(tf.shape(inp), [1])
+            #    init_state = tf.tile(init_state, batch_size)
+            #    init_state = tf.reshape(init_state, [-1, cell.state_size])
 
-            inps = tf.split(0, length, inp)
-            for i in range(length):
-                inps[i] = tf.squeeze(inps[i], [0])
-            _, final_state = rnn(cell, inps, init_state, sequence_length=lengths)
-            out = tf.slice(final_state, [0, 0], [-1, cell.output_size])
-            return out
+            _, final_state = dynamic_rnn(cell, inp, initial_state=init_state, sequence_length=lengths,
+                                         dtype=tf.float32, time_major=True)
+            if cell.output_size < cell.state_size:
+                #LSTM
+                return tf.slice(final_state, [0, cell.state_size-cell.output_size], [-1, -1])
+            else:
+                return final_state
 
         with tf.variable_scope("encoder_fw", initializer=initializer):
             h = my_rnn(None if embedding_mode == "tuned" else inp, None if embedding_mode == "fixed" else ids, cell,
-                         length, embeddings)
+                       length, embeddings)
 
-        scores = tf.contrib.layers.fully_connected(h, nclasses, weight_init=None)
+        scores = tf.contrib.layers.fully_connected(h, nclasses, weights_initializer=None)
         probs = tf.nn.softmax(scores)
         y = tf.placeholder(tf.int64, [None])
 
@@ -355,7 +364,7 @@ def create_model(length, l2_lambda, learning_rate, cell, embeddings, embedding_m
                                                                 for t in train_params if "E_w" not in t.name]))
             loss = loss + l2_loss
 
-        update = tf.train.AdamOptimizer(learning_rate, beta1=0.0).minimize(loss, var_list=train_params)
+        update = tf.train.AdamOptimizer(learning_rate).minimize(loss, var_list=train_params)
     return {"inp": inp, "ids": ids, "lengths": lengths, "y": y,
             "probs": probs, "scores": scores, "keep_prob": keep_prob_var,
             "loss": loss, "update": update}
@@ -377,7 +386,7 @@ if __name__ == "__main__":
                               "Learning rate decay when loss on validation set does not improve.")
     tf.app.flags.DEFINE_integer("batch_size", 25, "Number of examples per batch.")
     tf.app.flags.DEFINE_integer("min_epochs", 2, "Minimum num of epochs")
-    tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
+    tf.app.flags.DEFINE_string("cell", 'MUFURU', "'LSTM', 'GRU', 'RNN', 'MaxLSTM', 'MaxGRU', 'MaxRNN'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
     tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
     tf.app.flags.DEFINE_integer("checkpoint", 1000, "checkpoint at.")
@@ -387,12 +396,12 @@ if __name__ == "__main__":
                                 'number of dims for tunable embeddings if embedding mode is combined')
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
-    tf.app.flags.DEFINE_string("moru_ops", 'max,mul,keep,replace,diff,min,forget', "operations of moru cell.")
-    tf.app.flags.DEFINE_string("moru_op_biases", None, "biases of moru operations at beginning of training. "
-                                                       "Defaults to 0 for each.")
-    tf.app.flags.DEFINE_integer("moru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
+    tf.app.flags.DEFINE_string("mufuru_ops", 'max,mul,keep,replace,diff,min,forget', "operations of mufuru cell.")
+    tf.app.flags.DEFINE_string("mufuru_op_biases", None, "biases of mufuru operations at beginning of training. "
+                                                         "Defaults to 0 for each.")
+    tf.app.flags.DEFINE_integer("mufuru_op_ctr", None, "Size of op ctr. By default ops are controlled by current input"
                                                  "and previous state. Given a positive integer, an additional"
-                                                 "recurrent op ctr is introduced in MORUCell.")
+                                                 "recurrent op ctr is introduced in MUFURUCell.")
     tf.app.flags.DEFINE_string("model_path", '/tmp/sentiment.tf', "path to model.")
 
     tf.app.flags.DEFINE_string('device', '/gpu:0', 'device to run on')

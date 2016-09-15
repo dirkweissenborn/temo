@@ -151,7 +151,7 @@ if __name__ == "__main__":
     tf.app.flags.DEFINE_integer("num_layers", 1, "Number of layers.")
     tf.app.flags.DEFINE_string("cell", 'MORU', "'LSTM', 'GRU', 'MORU'")
     tf.app.flags.DEFINE_integer("seed", 12345, "Random seed.")
-    tf.app.flags.DEFINE_integer("runs", 10, "How many runs.")
+    tf.app.flags.DEFINE_integer("runs", 3, "How many runs.")
     tf.app.flags.DEFINE_float("keep_prob", 1.0, "Keep probability for dropout.")
     tf.app.flags.DEFINE_string("result_file", None, "Where to write results.")
     tf.app.flags.DEFINE_string("moru_ops", 'keep,replace', "operations of moru cell.")

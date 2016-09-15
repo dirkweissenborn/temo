@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.python.ops.rnn.rnn_cell import *
+from tensorflow.python.ops.rnn_cell import *
 
 _operations = {"max": lambda s, v: tf.maximum(s, v),
                "keep": lambda s, v: s,
@@ -12,9 +12,94 @@ _operations = {"max": lambda s, v: tf.maximum(s, v),
 
 
 class MuFuRUCell(RNNCell):
+    """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078)."""
 
     def __init__(self, num_units, op_controller_size=None,
-                 ops=(_operations["keep"], _operations["replace"], _operations["mul"]),
+                 ops=(_operations["replace"], _operations["mul"]),
+                 op_biases=None):
+        """
+        :param num_units: number of hidden units
+        :param op_controller_size: if > 0 then use of recurrent controller for computing operation weights
+        :param ops: list of operations as python function objects with input parameters s
+                    (representing the old memory state) and v (representing the newly computed feature vector)
+        :param op_biases: optional, can be used to set initial bias on specific operations
+        """
+        self._num_units = num_units
+        self._op_controller_size = 0 if op_controller_size is None else op_controller_size
+        self._op_biases = list(op_biases)
+        self._ops = ops if ops is not None else list(map(lambda _: 0.0, ops))
+        self._num_ops = len(ops)
+
+    @staticmethod
+    def from_op_names(operations, num_units, biases=None, op_controller_size=None):
+        """
+        factory method to create MuFuRU from operation names
+        :param operations: list of names of operations from following:
+                           "max", "keep", "replace", "mul", "min", "diff", "forget", "sqr_diff"
+        :param num_units: number of hidden units
+        :param biases:  optional, can be used to set initial bias on specific operations
+        :param op_controller_size:
+        :return: MuFuRUCell
+        """
+        if biases is None:
+            biases = map(lambda _: 0.0, operations)
+        assert len(list(biases)) == len(operations), "Operations and operation biases have to have same length."
+        ops = list(map(lambda op: _operations[op], operations))
+        return MuFuRUCell(num_units, op_controller_size, ops, biases)
+
+    @property
+    def state_size(self):
+        return self._num_units
+
+    @property
+    def output_size(self):
+        return self._num_units
+
+    def __call__(self, inputs, state, scope=None):
+        with vs.variable_scope(scope or type(self).__name__):  # "MuFuRUCell"
+            op_ctr = None
+            if self._op_controller_size > 0:
+                op_ctr = tf.slice(state, [0, 0], [-1, self._op_controller_size])
+                state = tf.slice(state, [0, self._op_controller_size], [-1, self._num_units])
+
+            with vs.variable_scope("Reset"):  # Reset gate
+                # We start with bias of 1.0 to not reset and not update.
+                r = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, state]), self._num_units,
+                                                      activation_fn=tf.sigmoid,
+                                                      weights_initializer=None,
+                                                      biases_initializer=tf.constant_initializer(1.0))
+                state = r * state
+
+            with vs.variable_scope("Candidate"):
+                c = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, state]), self._num_units,
+                                                      weights_initializer=None,
+                                                      activation_fn=tf.tanh)
+
+            new_op_ctr = None
+            if self._op_controller_size > 0:
+                with vs.variable_scope("Op_controller"):
+                    # ReLU activation
+                    new_op_ctr = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, state, op_ctr]),
+                                                                   self._op_controller_size)
+            else:
+                new_op_ctr = tf.concat(1, [inputs, state])
+
+            with vs.variable_scope("Update"):
+                u = tf.contrib.layers.fully_connected(new_op_ctr, self._num_units,
+                                                      activation_fn=tf.sigmoid,
+                                                      weights_initializer=None,
+                                                      biases_initializer=tf.constant_initializer(1.0))
+
+            states = tf.split(1, len(self._ops), state)
+            cs = tf.split(1, len(self._ops), c)
+            us = tf.split(1, len(self._ops), u)
+            new_state = tf.concat(1, [u * s + (1 - u) * op(s, c) for s, c, u, op in zip(states, cs, us, self._ops)])
+        return new_state, new_state
+
+class MuFuRUCellOld(RNNCell):
+
+    def __init__(self, num_units, op_controller_size=None,
+                 ops=(_operations["replace"], _operations["mul"]),
                  op_biases=None):
         """
         :param num_units: number of hidden units
