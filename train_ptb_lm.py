@@ -2,7 +2,7 @@ from mufuru import *
 import numpy as np
 import random
 import time
-from tensorflow.models.rnn import rnn
+from tensorflow.python.ops.rnn import rnn
 from tensorflow.models.rnn.ptb import reader
 import os
 import copy
@@ -57,7 +57,7 @@ class PTBModel(object):
         #
         inputs = [tf.squeeze(input_, [1])
                   for input_ in tf.split(1, num_steps, inputs)]
-        outputs, state = rnn.rnn(cell, inputs, initial_state=self._initial_state)
+        outputs, state = rnn(cell, inputs, initial_state=self._initial_state)
 
         output = tf.reshape(tf.concat(1, outputs), [-1, mem_size])
         softmax_w = tf.get_variable("softmax_w", [mem_size, vocab_size])
@@ -164,10 +164,13 @@ if __name__ == "__main__":
 
 
     FLAGS = tf.app.flags.FLAGS
-    eval_FLAGS = copy.deepcopy(FLAGS)
+    FLAGS._parse_flags()
     raw_data = reader.ptb_raw_data(FLAGS.data)
     train_data, valid_data, test_data, _ = raw_data
     perplexities = []
+
+    batch_size = FLAGS.batch_size
+    num_steps = FLAGS.num_steps
 
     rng = random.Random(FLAGS.seed)
     for run_id in range(FLAGS.runs):
@@ -182,9 +185,11 @@ if __name__ == "__main__":
                     m = PTBModel(is_training=True, FLAGS=FLAGS)
                 with tf.variable_scope("model", reuse=True, initializer=initializer):
                     mvalid = PTBModel(is_training=False, FLAGS=FLAGS)
-                    eval_FLAGS.batch_size = 1
-                    eval_FLAGS.num_steps = 1
-                    mtest = PTBModel(is_training=False, FLAGS=eval_FLAGS)
+                    FLAGS.batch_size = 1
+                    FLAGS.num_steps = 1
+                    mtest = PTBModel(is_training=False, FLAGS=FLAGS)
+                    FLAGS.batch_size = batch_size
+                    FLAGS.num_steps = num_steps
 
             tf.initialize_all_variables().run()
             saver = tf.train.Saver(tf.trainable_variables())
