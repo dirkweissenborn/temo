@@ -11,7 +11,7 @@ _operations = {"max": lambda s, v: tf.maximum(s, v),
                "sqr_diff": lambda s, v: 0.25 * (s - v)**2}
 
 
-class MuFuRUCell(RNNCell):
+class MuFuRUCellAlternative(RNNCell):
     """Gated Recurrent Unit cell (cf. http://arxiv.org/abs/1406.1078)."""
 
     def __init__(self, num_units, op_controller_size=None,
@@ -96,7 +96,7 @@ class MuFuRUCell(RNNCell):
             new_state = tf.concat(1, [u * s + (1 - u) * op(s, c) for s, c, u, op in zip(states, cs, us, self._ops)])
         return new_state, new_state
 
-class MuFuRUCellOld(RNNCell):
+class MuFuRUCell(RNNCell):
 
     def __init__(self, num_units, op_controller_size=None,
                  ops=(_operations["replace"], _operations["mul"]),
@@ -168,7 +168,8 @@ class MuFuRUCellOld(RNNCell):
                                                       activation_fn=tf.nn.sigmoid,
                                                       biases_initializer=tf.constant_initializer(1.0))
             with vs.variable_scope("Feature"):
-                f = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, r * s]), activation_fn=tf.nn.sigmoid)
+                f = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, r * s]), self._num_units,
+                                                      activation_fn=tf.nn.sigmoid)
             new_op_ctr = None
             if self._op_controller_size > 0:
                 with vs.variable_scope("Op_controller"):
