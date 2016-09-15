@@ -133,7 +133,9 @@ class MuFuRUCell(RNNCell):
 
     def _op_weights(self, inputs):
         # compute unnormalized operation weights
-        t = tf.contrib.layers.fully_connected(inputs, self._num_units * self._num_ops, activation_fn=None)
+        t = tf.contrib.layers.fully_connected(inputs, self._num_units * self._num_ops,
+                                              weights_initializer=None,
+                                              activation_fn=None)
         # compute softmax, using tf.nn.softmax was much slower than the following code
         weights = tf.split(1, self._num_ops, t)
         for i, w in enumerate(weights):
@@ -166,16 +168,19 @@ class MuFuRUCell(RNNCell):
                 # We start with bias of 1.0 to not reset and not udpate.
                 r = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, s]), self._num_units,
                                                       activation_fn=tf.nn.sigmoid,
+                                                      weights_initializer=None,
                                                       biases_initializer=tf.constant_initializer(1.0))
             with vs.variable_scope("Feature"):
                 f = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, r * s]), self._num_units,
+                                                      weights_initializer=None,
                                                       activation_fn=tf.nn.sigmoid)
             new_op_ctr = None
             if self._op_controller_size > 0:
                 with vs.variable_scope("Op_controller"):
                     # ReLU activation
                     new_op_ctr = tf.contrib.layers.fully_connected(tf.concat(1, [inputs, s, op_ctr]),
-                                                                   self._op_controller_size)
+                                                                   self._op_controller_size,
+                                                                   weights_initializer=None)
             else:
                 new_op_ctr = tf.concat(1, [inputs, s])
             with vs.variable_scope("Op"):
